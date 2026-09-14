@@ -1,0 +1,55 @@
+# SDO Schedule Planner
+
+A single-file React app (`day-off-pay-planner.jsx`) built for a DFW-based flight attendant to maximize SDO (Scheduled Day Off) pay under FLICA scheduling rules. Originally built as a Claude.ai artifact — one large component, no build tooling of its own. A standalone `sdo-schedule-planner.html` is also generated from it (see "Standalone HTML build" below) for use outside Claude entirely.
+
+## What SDO pay is (the whole point of this tool)
+
+An Open Time trip picked up on a day you're **already scheduled off** pays double: once as worked credit, once again as a bonus on top of guarantee. Trade Board pickups and Swap-technique pickups **never** earn SDO — only a proper Open Time Add on an existing day off does, no matter what dates the trip happens to touch. Every recommendation in this tool exists to surface Adds that qualify, or to manufacture new days off (via the drop-trip swap technique) that a later Add can then land on.
+
+## Core business rules (treat as ground truth, not assumptions)
+
+- **SDO pay formula**: once SDO is actually confirmed (bonus hours > 0) and worked hours clear 75 (the monthly guarantee), pay = 75 (fixed base) + all confirmed SDO bonus hours — not actual-hours + bonus. With **zero** confirmed SDO, there is no substitution at all: confirmed credit hours is simply the real baseline, however high or low, fully uncapped. Working 81 hours with no SDO involved pays for 81, not 75 — the guarantee floor only ever matters once SDO is genuinely in the mix. This distinction was a real bug once (capping unconditionally); don't regress it.
+- **60-hour floor**: a trip can't be swapped away if it would drop the month below 60 credit hours.
+- **Max consecutive work days**: contractually 6 (`MAX_CONSECUTIVE_WORK_DAYS`), but user-configurable *down* via `maxConsecutiveDaysPref`/`effectiveMaxConsecutive` (never up — hard-capped at the contract max). Every Add/Swap/Trade Board recommendation must use `effectiveMaxConsecutive`, never the raw constant.
+- **Minimum rest between duty periods**: 10 hours, checked via report/arrive times where known (only ever known for Open Time/Trade Board sourced trips — never for the original schedule import).
+- **Optional minimum days off between working days** (`minRestDaysPref`/`effectiveMinRestDays`, default disabled): separate from the two rules above. If set, no recommendation may leave a gap shorter than this between a candidate pickup and the nearest *other* existing working day, checked via `violatesMinRestGap`. This checks the gap to the nearest existing work day in either direction — it does **not** work by grouping contiguous days into "runs" and checking gaps between runs (an earlier version got this wrong: two directly-adjacent days just merge into one run with no gap to check, which fails the very case this feature exists for — a candidate landing immediately after an existing work day). Recomputed fresh every time against whatever the current schedule looks like; never a fixed block on specific calendar dates.
+- **Swap (drop-trip technique)**: drop 2+ of your own trips, pick up 1+ from Open Time. Doesn't itself earn SDO, ever — regardless of what dates the swap-in happens to touch, even if it extends across days that used to be scheduled off. Those days just become ordinary working days; nothing about the swap path ever adds them to `sdoFlags`. A dropped trip does **not** need to be individually fully green — only the days that end up *truly freed* (not covered by whatever swap-in replaces them) need to be green on the Reserve Grid. Multi-trip swap-ins (combining two Open Time trips to cover what one alone can't) are supported as a fallback when no single trip works. **Dropped trips rejoin the Open Time pool** (`droppedTripsPool`, tagged "DROPPED" in the pot viewer) and become available for further Adds/Swaps/Trades — this is deliberately scoped to the Swap drop only, since that's the one mechanic where a dropped trip genuinely returns to the open market. A trip that re-enters the pool this way is **fully eligible for SDO again on its next pickup** — SDO eligibility comes from the pickup mechanism (a full Add on an existing day off), never from a trip's history. It doesn't matter that it may have originally come off the Trade Board.
+- **Trade Board post/pickup of an already-listed trip**: never needs Reserve Grid checks — whoever picks it up takes over the exact same days, so net coverage never changes. A Trade Board **Add** (picking something up) must never be flagged SDO (`acceptAddTrip(trip, flagAsSdo)` takes an explicit flag for exactly this reason — Trade Board calls it with `false`). This was a real bug once: flagging it SDO anyway both misrepresented a bonus that was never earned *and* incorrectly blocked that trip from ever being used in a future Swap (since SDO-flagged trips are excluded from the swap pool).
+- **Bilateral Trade (give one trip, receive a specific one back)**: also never needs Reserve Grid checks on either leg. Incoming side can come from the loaded Trade Board, the Opentime pot (even non-SDO-eligible trips — a Trade doesn't require day-off coverage), or fully manual entry. The outgoing leg does *not* feed the dropped-trips pool (unlike a Swap) — it's a specific person-to-person handoff, not a return to the open market. Collapsible section, titled "Non-SDO Trip Trades" in the UI. Has an opt-in checkbox (off by default) to allow trading away a trip already flagged SDO.
+- **VAC/VAX days**: count as days off, credited at a flat 3h each, never a valid pickup target — protected in every eligibility check.
+
+## Known, permanent data limitations
+
+- The user's own schedule import gives **total month credit only**, never per-trip credit. Manually-entered credit (in "Your trips") unlocks (a) SDO bonus tracking for pre-existing SDO trips and (b) automatic baseline adjustment on an accepted Swap (needs *both* dropped trips' credit known; swap-in credit is always known from board data).
+- No clock times on the original schedule import — minimum-rest checks only apply where report/arrive are known.
+- Block hours can't be recalculated after drops.
+
+## Architecture notes
+
+- **Trade Board has three real-world export formats** to detect and route between: FLICA CSV export (quoted, multi-line cells), raw copy-paste off the rendered webpage (each field on its own line, anchored by a `PAIRING:DATE` identity line, no CSV quoting), and a plain columnar format. Detection is shared (`looksLikeFlicaTradeExport` / `looksLikeFlicaTradeRawPaste`) between the paste path and the file-import path — don't let those diverge again.
+- **Reserve Grid header detection** handles a merged/rowspan "Date" title cell that sometimes leaves a blank placeholder (CSV export) and sometimes drops the cell entirely (raw browser paste, one column short).
+- **Change log is fully data-driven**, not closure-based — every entry is a plain serializable `{kind, op, payload}` replayed through `executeLogAction`. This is what makes revert identical whether the entry was created this session or reloaded from a save. New reversible action kinds should follow this pattern.
+- **No `window.confirm`/`alert`/`prompt`** — these are unreliable in a sandboxed artifact iframe (this was a real, confirmed bug: clicking a confirm-gated action did nothing). Every confirmation goes through an in-app `pendingConfirm` state and a **sticky** banner (`position: sticky`) near the top of the viewport — it has to be sticky, not just top-of-page, or it renders off-screen and looks broken when triggered from deep in a long page (also a real, confirmed bug).
+- **Trip shape normalization**: multi-trip swap-ins, non-SDO trades, and dropped-pool trips all normalize to `{id, pairing, dateTok, days, creditHours, layover, start, report, arrive}` so they flow through existing Add/Swap-in/Trade matching without special-casing.
+- **Theming**: every color is a CSS custom property, defined twice under `.doplan[data-theme="dark"]` / `[data-theme="light"]`. Never hardcode a hex color.
+- **Notes box and Life Planner are intentionally inert** — pure reference (free text, and an uncapped day-by-day activity log), never read by any calculation.
+- **Money formatting**: `formatMoney` shows exact cents (`minimumFractionDigits`/`maximumFractionDigits: 2`) — it used to round to whole dollars, which was wrong and got fixed. Don't reintroduce rounding there.
+
+## Standalone HTML build
+
+`sdo-schedule-planner.html` is generated from the `.jsx` for use completely outside Claude (double-click, opens in any browser, no install). It is **not** hand-maintained separately — regenerate it from the `.jsx` after any change, via:
+
+1. Strip the `import { useState, useMemo, useEffect } from "react";` line and the `export default` on the component function (they only make sense in a module/build context).
+2. Compile the JSX to plain JS with esbuild: `esbuild component.jsx --jsx-factory=React.createElement --jsx-fragment=React.Fragment --target=es2018 --outfile=compiled.js`. **Do not** rely on in-browser Babel Standalone for this — an earlier version did, transpiling ~190KB of JSX live in the browser on every page load, and it was fragile enough to fail outright. Pre-compiling once, server-side (or build-side), and shipping plain JS is far more reliable.
+3. Wrap in an HTML shell that loads React + ReactDOM 18 via CDN (`unpkg.com`), defines a `window.storage` shim backed by `localStorage` (same async `get`/`set`/`delete` interface as Claude's artifact storage API, including throwing on a missing key — the app's save/load code expects exactly that), and calls `ReactDOM.createRoot(...).render(React.createElement(DayOffPayPlanner))`.
+4. Sanity-check before shipping: no leftover `import`/`export`, no stray `</script>` sequences inside the compiled JS (would prematurely close the script tag), balanced braces/parens.
+
+This still requires an internet connection on first load (CDN-hosted React/ReactDOM) — that's the most likely failure mode if someone reports it "won't load."
+
+## Testing approach used throughout
+
+No formal test suite. Verification is: extract the relevant pure function(s) with `sed`/`grep`, run them standalone in Node against constructed edge cases (including the user's real pasted data whenever available), confirm the numbers before touching the UI. This has caught several real bugs before shipping, including two self-inflicted ones from a careless global find-and-replace (a circular reference and a temporal-dead-zone bug when introducing the max-consecutive-days preference) — both caught by the same habit of testing immediately after editing, not after the fact.
+
+## User context
+
+DFW-based flight attendant, uses FLICA for scheduling, hourly rate and bid month/year configured at the top of the tool.
