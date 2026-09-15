@@ -15,6 +15,19 @@ const LAST_ACTIVITY_KEY = "doplan_last_activity";
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = not checked yet, null = signed out
   const [profile, setProfile] = useState(undefined);
+  const [checkoutStatus, setCheckoutStatus] = useState("");
+
+  async function handleSubscribe() {
+    setCheckoutStatus("Starting checkout…");
+    try {
+      const { data, error } = await supabase.functions.invoke("create-checkout-session");
+      if (error) throw error;
+      if (!data?.url) throw new Error("No checkout URL returned");
+      window.location.href = data.url;
+    } catch (err) {
+      setCheckoutStatus(`Couldn't start checkout: ${err.message || err}`);
+    }
+  }
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -78,13 +91,32 @@ export default function App() {
         <p style={{ fontSize: 14, color: "#555", marginBottom: 20 }}>
           Your free access has ended. Subscribe to keep using the SDO Schedule Planner.
         </p>
-        <button
-          type="button"
-          onClick={() => supabase.auth.signOut()}
-          style={{ padding: "8px 16px", fontSize: 13, cursor: "pointer" }}
-        >
-          Log out
-        </button>
+        <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <button
+            type="button"
+            onClick={handleSubscribe}
+            style={{
+              padding: "8px 16px",
+              fontSize: 13,
+              cursor: "pointer",
+              background: "#111",
+              color: "#fff",
+              border: "none",
+              borderRadius: 4,
+              fontWeight: 500,
+            }}
+          >
+            Subscribe
+          </button>
+          <button
+            type="button"
+            onClick={() => supabase.auth.signOut()}
+            style={{ padding: "8px 16px", fontSize: 13, cursor: "pointer" }}
+          >
+            Log out
+          </button>
+        </div>
+        {checkoutStatus && <p style={{ marginTop: 14, fontSize: 12, color: "#555" }}>{checkoutStatus}</p>}
       </div>
     );
   }

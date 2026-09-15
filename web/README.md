@@ -31,9 +31,43 @@ only where save data lives and who can see it is different.
   (`savePlannerState`/`loadPlannerState`/`clearSavedState`), which now read
   and write `planner_state` in Supabase instead of `window.storage`.
 
-## What's not here yet
+## Billing (Phase 4 — turning it on)
 
-Billing (Stripe checkout + webhook) and the beta→trial cutover script —
-that's Phase 4 in `../ROADMAP.md`, deliberately later. Every new signup
-currently gets `subscription_status = 'beta'`, so `hasAccess` always returns
-true and the upgrade screen never shows.
+The plumbing is built (see `../supabase/functions/`), but nothing is wired
+up to real Stripe credentials yet, and every signup still defaults to
+`subscription_status = 'beta'` (unlimited free access). To actually flip
+billing on:
+
+1. In Stripe, create a recurring **Price** for the subscription. Copy its id
+   (`price_...`).
+2. Run `../supabase/billing_schema.sql` in the Supabase SQL editor (adds a
+   `stripe_customer_id` column to `profiles`).
+3. Install the [Supabase CLI](https://supabase.com/docs/guides/cli) locally,
+   then from the repo root:
+   ```
+   supabase login
+   supabase link --project-ref <your-project-ref>
+   supabase secrets set STRIPE_SECRET_KEY=sk_live_... STRIPE_PRICE_ID=price_... APP_URL=https://sdoscheduletool.vercel.app
+   supabase functions deploy create-checkout-session
+   supabase functions deploy stripe-webhook --no-verify-jwt
+   ```
+   (`--no-verify-jwt` on the webhook only — Stripe calls it directly, not
+   through a logged-in user, so it can't send a Supabase auth token.)
+4. In the Stripe dashboard, add a webhook endpoint pointing at
+   `https://<project-ref>.functions.supabase.co/stripe-webhook`, subscribed
+   to `checkout.session.completed`, `invoice.payment_succeeded`,
+   `invoice.payment_failed`, and `customer.subscription.deleted`. Copy its
+   signing secret (`whsec_...`) and set it too:
+   ```
+   supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_...
+   ```
+5. The app already has a **Subscribe** button (shown whenever `hasAccess`
+   returns false) wired to call `create-checkout-session` and redirect to
+   Stripe Checkout — nothing else to build there.
+6. When ready to actually cut everyone over from unlimited beta access to a
+   real trial, run `../scripts/cutover-to-trialing.mjs` once (see that file
+   for usage). After that, update the `handle_new_user` trigger (or add an
+   edge function called right after signup) so *new* signups also get
+   `trialing` + a computed `trial_ends_at` instead of defaulting to `beta` —
+   deliberately not done yet, so beta access stays unlimited until you
+   decide to make that change.
