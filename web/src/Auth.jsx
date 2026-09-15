@@ -87,6 +87,12 @@ export default function Auth() {
         )}
       </div>
       {status && <p style={{ marginTop: 14, fontSize: 13, color: "#555" }}>{status}</p>}
+      <p style={{ marginTop: 28, fontSize: 12, color: "#777", lineHeight: 1.5, borderTop: "1px solid #eee", paddingTop: 16 }}>
+        Your schedule data is private to your account — it's never shared with or sold to anyone,
+        and no other user can see it. This tool is independent and not affiliated with PSA
+        Airlines, American Airlines, or FLICA; it simply works with the schedule information you
+        paste in yourself.
+      </p>
     </div>
   );
 }
