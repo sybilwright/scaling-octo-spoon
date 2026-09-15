@@ -1340,6 +1340,32 @@ export default function DayOffPayPlanner({ session }) {
     } catch (e) {
       if (silent !== true) setSaveStatus("Save failed — try again.");
     }
+    saveMonthlyStats(); // best-effort analytics snapshot -- never affects the status above
+  }
+
+  // Snapshot (not a running total) of this bid month's confirmed SDO bonus
+  // and credit hours, upserted every save -- lets the account owner see how
+  // much the tool is actually getting each user, without exposing anyone's
+  // full schedule data (see supabase/admin_stats_schema.sql for the RLS
+  // that only the owner's account can read across users).
+  async function saveMonthlyStats() {
+    if (!session?.user?.id) return;
+    try {
+      await supabase.from("monthly_stats").upsert({
+        user_id: session.user.id,
+        email: session.user.email,
+        bid_year: year,
+        bid_month: month + 1,
+        hourly_rate: hourlyRate,
+        confirmed_bonus_hours: confirmedBonusHours,
+        confirmed_bonus_dollars: confirmedBonusHours * hourlyRate,
+        total_confirmed_credit_hours: totalConfirmedCreditHours,
+        updated_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      // Silent on purpose -- this is a secondary analytics write, never worth
+      // alarming the user (or blocking their actual save) over.
+    }
   }
 
   async function loadPlannerState(announce) {

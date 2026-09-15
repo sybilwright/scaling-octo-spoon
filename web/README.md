@@ -31,6 +31,22 @@ only where save data lives and who can see it is different.
   (`savePlannerState`/`loadPlannerState`/`clearSavedState`), which now read
   and write `planner_state` in Supabase instead of `window.storage`.
 
+## Admin bonus/credit-hour stats
+
+Run `../supabase/admin_stats_schema.sql` once in the Supabase SQL editor —
+it adds an `is_admin` flag to `profiles` and a `monthly_stats` table that
+gets upserted every time any user saves their schedule (confirmed SDO bonus
+hours/dollars and total confirmed credit hours for that bid month, per
+user). Then make your own account the admin:
+
+```sql
+update profiles set is_admin = true where email = 'avesallen19@gmail.com';
+```
+
+Once that's set, log back in (a running session won't pick up the new flag)
+and an **Admin stats** button appears in the header bar — it opens a table
+of every user's numbers across all bid months.
+
 ## Billing (Phase 4 — turning it on)
 
 The plumbing is built (see `../supabase/functions/`), but nothing is wired

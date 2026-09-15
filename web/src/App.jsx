@@ -3,6 +3,7 @@ import { supabase } from "./supabaseClient";
 import { hasAccess } from "./access";
 import Auth from "./Auth";
 import DayOffPayPlanner from "./DayOffPayPlanner";
+import AdminStats from "./AdminStats";
 
 // Every login is now a fresh, deliberate action (supabaseClient.js uses
 // persistSession: false, so nothing survives a page reload) -- this only
@@ -18,6 +19,7 @@ export default function App() {
   const [session, setSession] = useState(undefined); // undefined = not checked yet, null = signed out
   const [profile, setProfile] = useState(undefined);
   const [checkoutStatus, setCheckoutStatus] = useState("");
+  const [showAdminStats, setShowAdminStats] = useState(false);
 
   async function handleSubscribe() {
     setCheckoutStatus("Starting checkout…");
@@ -66,7 +68,7 @@ export default function App() {
     let cancelled = false;
     supabase
       .from("profiles")
-      .select("subscription_status, trial_ends_at")
+      .select("subscription_status, trial_ends_at, is_admin")
       .eq("id", session.user.id)
       .single()
       .then(({ data, error }) => {
@@ -135,22 +137,42 @@ export default function App() {
         }}
       >
         <span>Signed in as <strong>{session.user.email}</strong></span>
-        <button
-          type="button"
-          onClick={() => supabase.auth.signOut()}
-          style={{
-            background: "#fff",
-            border: "none",
-            borderRadius: 4,
-            padding: "6px 14px",
-            fontSize: 13,
-            fontWeight: 500,
-            cursor: "pointer",
-          }}
-        >
-          Log out
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          {profile?.is_admin && (
+            <button
+              type="button"
+              onClick={() => setShowAdminStats(true)}
+              style={{
+                background: "transparent",
+                border: "1px solid #fff",
+                color: "#fff",
+                borderRadius: 4,
+                padding: "6px 14px",
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              Admin stats
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => supabase.auth.signOut()}
+            style={{
+              background: "#fff",
+              border: "none",
+              borderRadius: 4,
+              padding: "6px 14px",
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
+          >
+            Log out
+          </button>
+        </div>
       </div>
+      {showAdminStats && <AdminStats onClose={() => setShowAdminStats(false)} />}
       <DayOffPayPlanner session={session} />
     </>
   );
