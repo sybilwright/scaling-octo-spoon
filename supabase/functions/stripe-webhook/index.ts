@@ -10,7 +10,13 @@
 
 import Stripe from "npm:stripe@17";
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { corsHeaders } from "../_shared/cors.ts";
+
+// Inlined so this file can be pasted whole into the Supabase dashboard's
+// Edge Function editor if you're not using the CLI.
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, stripe-signature",
+};
 
 const stripe = new Stripe(Deno.env.get("STRIPE_SECRET_KEY")!, {
   apiVersion: "2024-06-20",

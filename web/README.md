@@ -38,33 +38,41 @@ up to real Stripe credentials yet, and every signup still defaults to
 `subscription_status = 'beta'` (unlimited free access). To actually flip
 billing on:
 
+Two ways to deploy the two functions in `../supabase/functions/`: the
+Supabase CLI (faster if you have a terminal), or the dashboard's built-in
+function editor (no terminal needed — each function file is written to be
+self-contained/copy-pasteable for exactly this). Dashboard steps:
+
 1. In Stripe, create a recurring **Price** for the subscription. Copy its id
    (`price_...`).
 2. Run `../supabase/billing_schema.sql` in the Supabase SQL editor (adds a
    `stripe_customer_id` column to `profiles`).
-3. Install the [Supabase CLI](https://supabase.com/docs/guides/cli) locally,
-   then from the repo root:
-   ```
-   supabase login
-   supabase link --project-ref <your-project-ref>
-   supabase secrets set STRIPE_SECRET_KEY=sk_live_... STRIPE_PRICE_ID=price_... APP_URL=https://sdoscheduletool.vercel.app
-   supabase functions deploy create-checkout-session
-   supabase functions deploy stripe-webhook --no-verify-jwt
-   ```
-   (`--no-verify-jwt` on the webhook only — Stripe calls it directly, not
-   through a logged-in user, so it can't send a Supabase auth token.)
-4. In the Stripe dashboard, add a webhook endpoint pointing at
-   `https://<project-ref>.functions.supabase.co/stripe-webhook`, subscribed
+3. In the Supabase dashboard, go to **Edge Functions** → **Deploy a new
+   function**. Name it exactly `create-checkout-session`, paste in the full
+   contents of `../supabase/functions/create-checkout-session/index.ts`, and
+   deploy.
+4. Repeat for `stripe-webhook`, pasting
+   `../supabase/functions/stripe-webhook/index.ts`. After deploying, open
+   that function's settings and turn **off** "Enforce JWT Verification" —
+   Stripe calls this directly, not through a logged-in user, so it can't
+   send a Supabase auth token.
+5. Still in Edge Functions, find **Manage secrets** (or **Secrets**) and add:
+   - `STRIPE_SECRET_KEY` — from the Stripe dashboard
+   - `STRIPE_PRICE_ID` — the price id from step 1
+   - `APP_URL` — `https://sdoscheduletool.vercel.app`
+   (`SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` are
+   already available automatically — don't set those.)
+6. Each deployed function has its own URL shown in the dashboard, something
+   like `https://<project-ref>.functions.supabase.co/stripe-webhook`. In the
+   Stripe dashboard, add a webhook endpoint pointing at that URL, subscribed
    to `checkout.session.completed`, `invoice.payment_succeeded`,
-   `invoice.payment_failed`, and `customer.subscription.deleted`. Copy its
-   signing secret (`whsec_...`) and set it too:
-   ```
-   supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_...
-   ```
-5. The app already has a **Subscribe** button (shown whenever `hasAccess`
+   `invoice.payment_failed`, and `customer.subscription.deleted`. Stripe
+   shows you a signing secret (`whsec_...`) for it — add that as one more
+   secret, `STRIPE_WEBHOOK_SECRET`, back in step 5's secrets panel.
+7. The app already has a **Subscribe** button (shown whenever `hasAccess`
    returns false) wired to call `create-checkout-session` and redirect to
    Stripe Checkout — nothing else to build there.
-6. When ready to actually cut everyone over from unlimited beta access to a
+8. When ready to actually cut everyone over from unlimited beta access to a
    real trial, run `../scripts/cutover-to-trialing.mjs` once (see that file
    for usage). After that, update the `handle_new_user` trigger (or add an
    edge function called right after signup) so *new* signups also get
