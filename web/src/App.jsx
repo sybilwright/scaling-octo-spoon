@@ -55,5 +55,42 @@ export default function App() {
     );
   }
 
-  return <DayOffPayPlanner session={session} />;
+  return (
+    <>
+      <div
+        style={{
+          position: "fixed",
+          top: 8,
+          right: 8,
+          zIndex: 9999,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          background: "rgba(0,0,0,0.75)",
+          color: "#fff",
+          padding: "4px 8px",
+          borderRadius: 6,
+          fontSize: 11,
+          fontFamily: "sans-serif",
+        }}
+      >
+        <span>{session.user.email}</span>
+        <button
+          type="button"
+          onClick={() => supabase.auth.signOut()}
+          style={{
+            background: "#fff",
+            border: "none",
+            borderRadius: 4,
+            padding: "3px 8px",
+            fontSize: 11,
+            cursor: "pointer",
+          }}
+        >
+          Log out
+        </button>
+      </div>
+      <DayOffPayPlanner session={session} />
+    </>
+  );
 }
