@@ -4,13 +4,15 @@ import { hasAccess } from "./access";
 import Auth from "./Auth";
 import DayOffPayPlanner from "./DayOffPayPlanner";
 
-// A closed tab/browser can come back via "continue where you left off" with
-// sessionStorage intact, so a genuine tab-close can't be detected reliably.
-// Idle timeout is the dependable substitute: sign out after this long with
-// no mouse/keyboard/touch/scroll activity, checked against a timestamp in
-// localStorage so it also catches "closed the browser, reopened it later".
+// Every login is now a fresh, deliberate action (supabaseClient.js uses
+// persistSession: false, so nothing survives a page reload) -- this only
+// needs to catch a tab left open and untouched for a while, not a restored
+// browser session. Sign out after this long with no mouse/keyboard/touch/
+// scroll activity SINCE THIS LOGIN, not since some earlier session -- a
+// leftover timestamp from a previous login must never be checked against a
+// fresh one, or every login would immediately look "already idle" and sign
+// straight back out.
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
-const LAST_ACTIVITY_KEY = "doplan_last_activity";
 
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = not checked yet, null = signed out
@@ -40,21 +42,17 @@ export default function App() {
   useEffect(() => {
     if (!session) return;
 
-    const recordActivity = () => localStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()));
-
-    const lastActivity = Number(localStorage.getItem(LAST_ACTIVITY_KEY) || 0);
-    if (lastActivity && Date.now() - lastActivity > IDLE_TIMEOUT_MS) {
-      supabase.auth.signOut();
-      return;
-    }
-    recordActivity();
+    // In-memory only, starts fresh every time this effect runs (i.e. every
+    // new login) -- never persisted, so there's no stale value to compare
+    // a brand-new session against.
+    let lastActivity = Date.now();
+    const recordActivity = () => { lastActivity = Date.now(); };
 
     const events = ["mousedown", "keydown", "scroll", "touchstart"];
     events.forEach((event) => window.addEventListener(event, recordActivity));
 
     const interval = setInterval(() => {
-      const last = Number(localStorage.getItem(LAST_ACTIVITY_KEY) || 0);
-      if (Date.now() - last > IDLE_TIMEOUT_MS) supabase.auth.signOut();
+      if (Date.now() - lastActivity > IDLE_TIMEOUT_MS) supabase.auth.signOut();
     }, 60 * 1000);
 
     return () => {
