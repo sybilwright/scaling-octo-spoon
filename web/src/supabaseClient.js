@@ -9,4 +9,11 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// sessionStorage instead of the default localStorage: the session survives a
+// page refresh within the same tab, but is gone once the tab/browser closes,
+// so the next visit always starts at the login screen.
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    storage: window.sessionStorage,
+  },
+});

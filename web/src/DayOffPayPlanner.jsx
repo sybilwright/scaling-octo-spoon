@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { supabase } from "./supabaseClient";
 
 const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
@@ -1326,9 +1326,9 @@ export default function DayOffPayPlanner({ session }) {
     };
   }
 
-  async function savePlannerState() {
-    if (!session?.user?.id) { setSaveStatus("Saving isn't available right now."); return; }
-    setSaveStatus("Saving…");
+  async function savePlannerState(silent) {
+    if (!session?.user?.id) { if (silent !== true) setSaveStatus("Saving isn't available right now."); return; }
+    if (silent !== true) setSaveStatus("Saving…");
     try {
       const { error } = await supabase.from("planner_state").upsert({
         user_id: session.user.id,
@@ -1338,7 +1338,7 @@ export default function DayOffPayPlanner({ session }) {
       if (error) throw error;
       setSaveStatus(`Saved ${new Date().toLocaleTimeString()}`);
     } catch (e) {
-      setSaveStatus("Save failed — try again.");
+      if (silent !== true) setSaveStatus("Save failed — try again.");
     }
   }
 
@@ -1432,6 +1432,27 @@ export default function DayOffPayPlanner({ session }) {
     if (!loadedOnce) { setLoadedOnce(true); loadPlannerState(false); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep a ref to the latest savePlannerState closure so the interval/unload
+  // handlers below (set up once) always save the current state, not whatever
+  // it was when they were first attached.
+  const savePlannerStateRef = useRef(savePlannerState);
+  useEffect(() => { savePlannerStateRef.current = savePlannerState; });
+
+  useEffect(() => {
+    if (!loadedOnce) return;
+    const interval = setInterval(() => { savePlannerStateRef.current(true); }, 20000);
+    function saveOnHide() {
+      if (document.visibilityState === "hidden") savePlannerStateRef.current(true);
+    }
+    document.addEventListener("visibilitychange", saveOnHide);
+    window.addEventListener("pagehide", saveOnHide);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", saveOnHide);
+      window.removeEventListener("pagehide", saveOnHide);
+    };
+  }, [loadedOnce]);
 
   const nextMonth = (month + 1) % 12;
   const nextMonthYear = month === 11 ? year + 1 : year;
