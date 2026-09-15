@@ -4,6 +4,14 @@ import { hasAccess } from "./access";
 import Auth from "./Auth";
 import DayOffPayPlanner from "./DayOffPayPlanner";
 
+// A closed tab/browser can come back via "continue where you left off" with
+// sessionStorage intact, so a genuine tab-close can't be detected reliably.
+// Idle timeout is the dependable substitute: sign out after this long with
+// no mouse/keyboard/touch/scroll activity, checked against a timestamp in
+// localStorage so it also catches "closed the browser, reopened it later".
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const LAST_ACTIVITY_KEY = "doplan_last_activity";
+
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = not checked yet, null = signed out
   const [profile, setProfile] = useState(undefined);
@@ -15,6 +23,32 @@ export default function App() {
     });
     return () => listener.subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!session) return;
+
+    const recordActivity = () => localStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()));
+
+    const lastActivity = Number(localStorage.getItem(LAST_ACTIVITY_KEY) || 0);
+    if (lastActivity && Date.now() - lastActivity > IDLE_TIMEOUT_MS) {
+      supabase.auth.signOut();
+      return;
+    }
+    recordActivity();
+
+    const events = ["mousedown", "keydown", "scroll", "touchstart"];
+    events.forEach((event) => window.addEventListener(event, recordActivity));
+
+    const interval = setInterval(() => {
+      const last = Number(localStorage.getItem(LAST_ACTIVITY_KEY) || 0);
+      if (Date.now() - last > IDLE_TIMEOUT_MS) supabase.auth.signOut();
+    }, 60 * 1000);
+
+    return () => {
+      events.forEach((event) => window.removeEventListener(event, recordActivity));
+      clearInterval(interval);
+    };
+  }, [session]);
 
   useEffect(() => {
     if (!session?.user?.id) { setProfile(session === null ? null : undefined); return; }
