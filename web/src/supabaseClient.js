@@ -9,11 +9,14 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-// sessionStorage instead of the default localStorage: the session survives a
-// page refresh within the same tab, but is gone once the tab/browser closes,
-// so the next visit always starts at the login screen.
+// persistSession: false -- the session lives only in memory for the current
+// page load. Nothing is written to any storage, so every fresh page open
+// (a new tab, a refresh, reopening the link later) always lands on the sign-in
+// screen and requires logging in again, even for the account that was just
+// using it. Within a single page load (no reload), login still holds for as
+// long as the tab stays open, subject to the idle-timeout sign-out in App.jsx.
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    storage: window.sessionStorage,
+    persistSession: false,
   },
 });
