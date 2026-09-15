@@ -93,22 +93,18 @@ export default function App() {
     <>
       <div
         style={{
-          position: "fixed",
-          top: 8,
-          right: 8,
-          zIndex: 9999,
           display: "flex",
           alignItems: "center",
-          gap: 8,
-          background: "rgba(0,0,0,0.75)",
+          justifyContent: "space-between",
+          gap: 12,
+          background: "#1a1a1a",
           color: "#fff",
-          padding: "4px 8px",
-          borderRadius: 6,
-          fontSize: 11,
+          padding: "10px 20px",
           fontFamily: "sans-serif",
+          fontSize: 13,
         }}
       >
-        <span>{session.user.email}</span>
+        <span>Signed in as <strong>{session.user.email}</strong></span>
         <button
           type="button"
           onClick={() => supabase.auth.signOut()}
@@ -116,8 +112,9 @@ export default function App() {
             background: "#fff",
             border: "none",
             borderRadius: 4,
-            padding: "3px 8px",
-            fontSize: 11,
+            padding: "6px 14px",
+            fontSize: 13,
+            fontWeight: 500,
             cursor: "pointer",
           }}
         >
