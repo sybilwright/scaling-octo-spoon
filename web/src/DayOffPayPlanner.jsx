@@ -1850,7 +1850,10 @@ export default function DayOffPayPlanner({ session }) {
     for (let j = i + 1; j < swapRecs.length; j++) {
       const a = swapRecs[i], b = swapRecs[j];
       const pairKeyStr = `${a.key}__${b.key}`;
-      if (deniedSwapKeys.has(pairKeyStr)) continue;
+      // Denial is tracked per row (pair + specific swap-in, "pairKey::swapInId" -- see
+      // toggleDeniedSwap) not per pair, since the same two dropped trips can have several
+      // different swap-in options and only one of those needs to be denied. Filtered below,
+      // once each row's actual key exists, not here.
       swapPairs.push({ a, b, pairKey: pairKeyStr, totalDaysFreed: a.days + b.days, wantsOverlap: a.wantsOverlap || b.wantsOverlap });
     }
   }
@@ -1896,12 +1899,13 @@ export default function DayOffPayPlanner({ session }) {
           const freedKeys = [...p.a.keys, ...p.b.keys].filter((k) => !sKeys.includes(k));
           return { pair: p, swapIn: s, swapIns: [s], rowKey: `${p.pairKey}::${s.id}`, freedKeys, freedCount: freedKeys.length };
         })
+        .filter((row) => !deniedSwapKeys.has(row.rowKey))
         .sort((a, b) => b.freedCount - a.freedCount);
       if (allMatchingPairs.length) groups.push({ swapIn: s, rows: allMatchingPairs });
     });
     groups.sort((a, b) => (a.swapIn.creditHours || 0) - (b.swapIn.creditHours || 0));
     return groups;
-  }, [allOpenTrips, swapPairs, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays]);
+  }, [allOpenTrips, swapPairs, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys]);
 
   const pairsWithSingleMatch = useMemo(() => {
     const s = new Set();
@@ -1939,8 +1943,10 @@ export default function DayOffPayPlanner({ session }) {
           if (longestConsecutiveRun(combinedOccupied) > effectiveMaxConsecutive) continue;
           if (violatesMinRestGap(postDropOccupied, [...combined], effectiveMinRestDays)) continue;
           const freedKeys = [...freeable].filter((k) => !combined.has(k));
+          const rowKey = `${p.pairKey}::${c1.t.id}+${c2.t.id}`;
+          if (deniedSwapKeys.has(rowKey)) continue;
           found.push({
-            pair: p, swapIns: [c1.t, c2.t], rowKey: `${p.pairKey}::${c1.t.id}+${c2.t.id}`,
+            pair: p, swapIns: [c1.t, c2.t], rowKey,
             freedKeys, freedCount: freedKeys.length,
           });
         }
@@ -1948,7 +1954,7 @@ export default function DayOffPayPlanner({ session }) {
       results.push(...found);
     });
     return results;
-  }, [swapPairs, pairsWithSingleMatch, allOpenTrips, occupiedDateKeys, vacationDateKeys, dutyReportByDate, dutyArriveByDate, effectiveMaxConsecutive, effectiveMinRestDays]);
+  }, [swapPairs, pairsWithSingleMatch, allOpenTrips, occupiedDateKeys, vacationDateKeys, dutyReportByDate, dutyArriveByDate, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys]);
 
   const multiSwapRowsByKey = useMemo(() => {
     const m = new Map();
@@ -1965,6 +1971,35 @@ export default function DayOffPayPlanner({ session }) {
   const combinedSwapRowsByKey = useMemo(() => {
     return new Map([...swapRowsByKey, ...multiSwapRowsByKey]);
   }, [swapRowsByKey, multiSwapRowsByKey]);
+
+  // Planned (but not yet Approved) swaps don't touch baselineCredit -- only accepting one does.
+  // To warn before letting the user plan past the 60-hour floor, this sums what *would* change
+  // if every currently-Planned swap were accepted, using the same computation Accept itself
+  // uses. A pair whose dropped trips' credit isn't manually entered can't contribute a real
+  // number (see computeSwapCreditAdjustment) and is left out rather than guessed at.
+  const plannedSwapCreditDelta = useMemo(() => {
+    let sum = 0;
+    selectedSwaps.forEach((rowKey) => {
+      const row = combinedSwapRowsByKey.get(rowKey);
+      if (!row) return;
+      const adj = computeSwapCreditAdjustment(row.pair, row.swapIns);
+      if (adj != null) sum += adj;
+    });
+    return sum;
+  }, [selectedSwaps, combinedSwapRowsByKey, sdoTripCredits]);
+
+  // Projected worked hours if this specific row's swap were committed on top of whatever's
+  // already Planned -- null when the dropped trips' credit isn't known, since the 60-hour floor
+  // genuinely can't be checked without it (the same data limitation computeSwapCreditAdjustment
+  // already respects). If the row is already Planned, its own delta is already counted in
+  // plannedSwapCreditDelta, so it isn't added a second time.
+  function projectedHoursIfSwapPlanned(rowKey, pair, swapIns) {
+    const adj = computeSwapCreditAdjustment(pair, swapIns);
+    if (adj == null) return null;
+    const baseline = Math.max(parseFloat(baselineCredit) || 0, 0);
+    const alreadyCounted = selectedSwaps.has(rowKey);
+    return baseline + plannedSwapCreditDelta + (alreadyCounted ? 0 : adj);
+  }
 
   // A Trade Board post isn't a net removal of coverage — whoever picks it up takes over the
   // exact same days, so the Reserve Grid buffer is never actually affected. Only SDO/Premium matter here.
@@ -2730,6 +2765,8 @@ export default function DayOffPayPlanner({ session }) {
                   const swapChecked = selectedSwaps.has(rowKey);
                   const swapAccepted = acceptedSwaps.has(rowKey);
                   const addsShown = showAddsFor.has(rowKey);
+                  const floorProjection = projectedHoursIfSwapPlanned(rowKey, p, [swapIn]);
+                  const wouldViolateFloor = !swapChecked && !swapAccepted && floorProjection != null && floorProjection < 60;
                   const postSwapOccupied = new Set([...occupiedDateKeys].filter((k) => k !== undefined && !p.a.keys.includes(k) && !p.b.keys.includes(k)));
                   tripDateKeys(swapIn).forEach((k) => postSwapOccupied.add(k));
                   const unlockedAdds = enrichedOpen
@@ -2755,14 +2792,14 @@ export default function DayOffPayPlanner({ session }) {
                     <div key={rowKey} style={{ border: swapAccepted ? "1px solid var(--teal-bright)" : swapChecked ? "1px solid var(--teal)" : "1px solid var(--border)", borderRadius: 8, padding: 12, marginBottom: 8, marginLeft: 14 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                          <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--sans)" }}>
-                            <input type="checkbox" checked={swapChecked} onChange={() => toggleSwap(rowKey, unlockedAdds.map((t) => t.id))} /> Planned
+                          <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: wouldViolateFloor ? "not-allowed" : "pointer", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--sans)" }}>
+                            <input type="checkbox" checked={swapChecked} disabled={wouldViolateFloor} onChange={() => toggleSwap(rowKey, unlockedAdds.map((t) => t.id))} /> Planned
+                          </label>
+                          <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: wouldViolateFloor ? "not-allowed" : "pointer", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--sans)" }}>
+                            <input type="checkbox" checked={swapAccepted} disabled={wouldViolateFloor} onChange={() => toggleAcceptedSwap(p, rowKey, swapIn)} /> Approved in FLICA
                           </label>
                           <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--sans)" }}>
-                            <input type="checkbox" checked={swapAccepted} onChange={() => toggleAcceptedSwap(p, rowKey, swapIn)} /> Approved in FLICA
-                          </label>
-                          <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--sans)" }}>
-                            <input type="checkbox" checked={false} onChange={() => toggleDeniedSwap(p, rowKey, swapIn)} /> Denied
+                            <input type="checkbox" checked={deniedSwapKeys.has(rowKey)} onChange={() => toggleDeniedSwap(p, rowKey, swapIn)} /> Denied
                           </label>
                           <span style={{ color: "var(--text-primary)", fontFamily: "var(--mono)", fontSize: 13 }}>
                             Drop {p.a.pairing}{p.a.isPremium && <span className="badge" style={{ background: "var(--badge-red-bg)", color: "var(--amber-strong)", marginLeft: 4 }}>premium</span>}
@@ -2774,6 +2811,11 @@ export default function DayOffPayPlanner({ session }) {
                           Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · includes a wanted day" : ""}
                         </div>
                       </div>
+                      {wouldViolateFloor && (
+                        <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 8 }}>
+                          Can't plan this swap — it would take your worked total to {floorProjection.toFixed(2)}h, under the 60h floor.
+                        </div>
+                      )}
                       <button className="action small" style={{ marginTop: 8 }} onClick={() => toggleShowAdds(rowKey)}>
                         {addsShown ? "Hide" : "Show"} possible adds ({unlockedAdds.length})
                       </button>
@@ -2822,18 +2864,20 @@ export default function DayOffPayPlanner({ session }) {
                   const { pair: p, swapIns, rowKey, freedKeys } = row;
                   const swapChecked = selectedSwaps.has(rowKey);
                   const swapAccepted = acceptedSwaps.has(rowKey);
+                  const floorProjection = projectedHoursIfSwapPlanned(rowKey, p, swapIns);
+                  const wouldViolateFloor = !swapChecked && !swapAccepted && floorProjection != null && floorProjection < 60;
                   return (
                     <div key={rowKey} style={{ border: swapAccepted ? "1px solid var(--teal-bright)" : swapChecked ? "1px solid var(--teal)" : "1px solid var(--border)", borderRadius: 8, padding: 12, marginBottom: 8, marginLeft: 14 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                          <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--sans)" }}>
-                            <input type="checkbox" checked={swapChecked} onChange={() => toggleSwap(rowKey, [])} /> Planned
+                          <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: wouldViolateFloor ? "not-allowed" : "pointer", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--sans)" }}>
+                            <input type="checkbox" checked={swapChecked} disabled={wouldViolateFloor} onChange={() => toggleSwap(rowKey, [])} /> Planned
+                          </label>
+                          <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: wouldViolateFloor ? "not-allowed" : "pointer", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--sans)" }}>
+                            <input type="checkbox" checked={swapAccepted} disabled={wouldViolateFloor} onChange={() => toggleAcceptedSwap(p, rowKey, swapIns)} /> Approved in FLICA
                           </label>
                           <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--sans)" }}>
-                            <input type="checkbox" checked={swapAccepted} onChange={() => toggleAcceptedSwap(p, rowKey, swapIns)} /> Approved in FLICA
-                          </label>
-                          <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--sans)" }}>
-                            <input type="checkbox" checked={false} onChange={() => toggleDeniedSwap(p, rowKey, swapIns)} /> Denied
+                            <input type="checkbox" checked={deniedSwapKeys.has(rowKey)} onChange={() => toggleDeniedSwap(p, rowKey, swapIns)} /> Denied
                           </label>
                           <span style={{ color: "var(--text-primary)", fontFamily: "var(--mono)", fontSize: 13 }}>
                             Drop {p.a.pairing} + {p.b.pairing} → swap into {swapIns.map((si) => `${si.pairing} (${si.dateTok})`).join(" + ")}
@@ -2843,6 +2887,11 @@ export default function DayOffPayPlanner({ session }) {
                           Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · includes a wanted day" : ""}
                         </div>
                       </div>
+                      {wouldViolateFloor && (
+                        <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 8 }}>
+                          Can't plan this swap — it would take your worked total to {floorProjection.toFixed(2)}h, under the 60h floor.
+                        </div>
+                      )}
                     </div>
                   );
                 })}
