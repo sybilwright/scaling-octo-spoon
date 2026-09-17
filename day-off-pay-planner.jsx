@@ -1898,18 +1898,38 @@ export default function DayOffPayPlanner() {
   const multiSwapInOptions = useMemo(() => {
     const needMulti = swapPairs.filter((p) => !pairsWithSingleMatch.has(p.pairKey));
     if (!needMulti.length) return [];
-    const candidates = allOpenTrips
-      .filter((t) => t.creditHours != null && !t.autoTB && t.start)
+    // Same identity check as swapInGroups above -- without it, a candidate that's actually one
+    // of the two trips being dropped (same pairing+date) can be offered back as its own swap-in,
+    // producing a nonsensical "drop X, swap into X" row that frees 0 days. Worse, accepting one
+    // makes the trip flip between "original" and "injected" on every render, so its rowKey never
+    // stays stable and the row's checkboxes can never be unchecked once checked. The occurrence-
+    // count escape hatch still allows a genuinely duplicated pot listing (two open seats on the
+    // same pairing/date) to be picked up.
+    const identityKey = (pairing, dtok) => `${pairing}|${dtok}`;
+    const rawCandidates = allOpenTrips.filter((t) => t.creditHours != null && !t.autoTB && t.start);
+    const occurrenceCount = new Map();
+    rawCandidates.forEach((t) => {
+      const k = identityKey(t.pairing, t.dateTok);
+      occurrenceCount.set(k, (occurrenceCount.get(k) || 0) + 1);
+    });
+    const candidates = rawCandidates
       .map((t) => ({ t, keys: tripDateKeys(t) }))
       .filter(({ keys, t }) => keys.length > 0 && !violatesRestRule(keys, t.report, t.arrive) && !overlapsVacation(keys));
 
     const results = [];
     needMulti.forEach((p) => {
       const freeable = new Set([...p.a.keys, ...p.b.keys]);
+      const aIdentity = identityKey(p.a.pairing, `${pad2(p.a.startDay)}${MONTHS[p.a.startMonth]}`);
+      const bIdentity = identityKey(p.b.pairing, `${pad2(p.b.startDay)}${MONTHS[p.b.startMonth]}`);
+      const isDroppedIdentity = (t) => {
+        const tid = identityKey(t.pairing, t.dateTok);
+        return (tid === aIdentity || tid === bIdentity) && (occurrenceCount.get(tid) || 0) < 2;
+      };
       const found = [];
       for (let i = 0; i < candidates.length; i++) {
         for (let j = i + 1; j < candidates.length; j++) {
           const c1 = candidates[i], c2 = candidates[j];
+          if (isDroppedIdentity(c1.t) || isDroppedIdentity(c2.t)) continue;
           if (c1.t.pairing === c2.t.pairing && c1.t.dateTok === c2.t.dateTok) continue;
           if (c1.keys.some((k) => c2.keys.includes(k))) continue; // the two swap-ins can't overlap each other
           const combined = new Set([...c1.keys, ...c2.keys]);
