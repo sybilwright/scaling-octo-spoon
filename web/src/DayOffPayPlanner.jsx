@@ -222,6 +222,28 @@ function parseTradeBoardRawPaste(text, year) {
   return { trips, error: trips.length === 0 ? "Found the text, but couldn't match any listings to the expected raw Trade Board paste layout." : null };
 }
 
+// FLICA glues an info-tooltip's text onto the pairing code with no separator for
+// Trade-Board-sourced pairings when the Opentime pot page is copy-pasted, e.g.
+// "W7F57Click to view TradeBoard request details." -- matching the exact known phrase
+// (rather than guessing a boundary by letter case -- "Click" starts with an upper-case
+// C too, indistinguishable from a real pairing character that way) strips it cleanly.
+// This is a real, confirmed bug: without this, "TradeBoard" never matches \bTB\b (no
+// word boundary between "e" and "B"), so these trips silently kept their default
+// autoTB: false and could be offered as swap-ins/adds. Shared between the plain-paste
+// parser and the screenshot/manual-row parser -- don't let those diverge again, a
+// second real bug was this exact detection existing in one but not the other.
+function stripTradeBoardTooltip(pairing) {
+  let autoTB = false;
+  // Browser copy-paste of the tooltip can carry non-breaking spaces ( ) instead of
+  // regular ones -- normalize before matching, or the literal spaces in the pattern below
+  // silently fail to line up and this whole check does nothing.
+  const normalized = pairing.replace(/\s+/g, " ");
+  const tbTooltipMatch = normalized.match(/^(.*?)click to view tradeboard request details\.?\s*$/i);
+  if (tbTooltipMatch) { autoTB = true; pairing = tbTooltipMatch[1].trim(); }
+  else if (/tradeboard/i.test(normalized)) { autoTB = true; } // an unexpected variant of the tooltip text -- still flag it even if we can't cleanly strip it
+  return { pairing, autoTB };
+}
+
 // ---- Open Time / Trade Board table parser ----
 function parseBoard(text, year) {
   const lines = text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
@@ -258,18 +280,8 @@ function parseBoard(text, year) {
     let pairing = (cells[idx.pairing] || "").trim();
     if (!pairing || normalizeHeader(pairing) === "pairing") continue;
 
-    let autoTB = false;
-    // FLICA glues an info-tooltip's text onto the pairing code with no separator for
-    // Trade-Board-sourced pairings when the Opentime pot page is copy-pasted, e.g.
-    // "W7F57Click to view TradeBoard request details." -- matching the exact known phrase
-    // (rather than guessing a boundary by letter case -- "Click" starts with an upper-case
-    // C too, indistinguishable from a real pairing character that way) strips it cleanly.
-    // This is a real, confirmed bug: without this, "TradeBoard" never matches \bTB\b (no
-    // word boundary between "e" and "B"), so these trips silently kept their default
-    // autoTB: false and could be offered as swap-ins.
-    const tbTooltipMatch = pairing.match(/^(.*?)click to view tradeboard request details\.?\s*$/i);
-    if (tbTooltipMatch) { autoTB = true; pairing = tbTooltipMatch[1].trim(); }
-    else if (/tradeboard/i.test(pairing)) { autoTB = true; } // an unexpected variant of the tooltip text -- still flag it even if we can't cleanly strip it
+    let autoTB;
+    ({ pairing, autoTB } = stripTradeBoardTooltip(pairing));
     if (/\bTB\b/i.test(pairing)) { autoTB = true; pairing = pairing.replace(/\bTB\b/i, "").trim(); }
     if (cells.some((c) => normalizeHeader(c) === "tb")) autoTB = true;
 
@@ -371,6 +383,9 @@ function rowToTrip(row, year) {
   const days = parseInt(row.days, 10) || 1;
   let pairing = (row.pairing || "").trim();
   let autoTB = !!row.tb;
+  const stripped = stripTradeBoardTooltip(pairing);
+  pairing = stripped.pairing;
+  if (stripped.autoTB) autoTB = true;
   if (/\bTB\b/i.test(pairing)) { autoTB = true; pairing = pairing.replace(/\bTB\b/i, "").trim(); }
   return {
     id: `img-${row.id}`,

@@ -282,6 +282,18 @@ function parseTradeBoardRawPaste(text, year) {
   }
   return { trips, error: trips.length === 0 ? "Found the text, but couldn't match any listings to the expected raw Trade Board paste layout." : null };
 }
+function stripTradeBoardTooltip(pairing) {
+  let autoTB = false;
+  const normalized = pairing.replace(/\s+/g, " ");
+  const tbTooltipMatch = normalized.match(/^(.*?)click to view tradeboard request details\.?\s*$/i);
+  if (tbTooltipMatch) {
+    autoTB = true;
+    pairing = tbTooltipMatch[1].trim();
+  } else if (/tradeboard/i.test(normalized)) {
+    autoTB = true;
+  }
+  return { pairing, autoTB };
+}
 function parseBoard(text, year) {
   const lines = text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
   if (lines.length < 2) return { trips: [], error: lines.length === 1 ? "Paste the header row plus at least one trip row." : "Paste the board's table, header row included." };
@@ -315,14 +327,8 @@ function parseBoard(text, year) {
     if (cells.length < 3) continue;
     let pairing = (cells[idx.pairing] || "").trim();
     if (!pairing || normalizeHeader(pairing) === "pairing") continue;
-    let autoTB = false;
-    const tbTooltipMatch = pairing.match(/^(.*?)click to view tradeboard request details\.?\s*$/i);
-    if (tbTooltipMatch) {
-      autoTB = true;
-      pairing = tbTooltipMatch[1].trim();
-    } else if (/tradeboard/i.test(pairing)) {
-      autoTB = true;
-    }
+    let autoTB;
+    ({ pairing, autoTB } = stripTradeBoardTooltip(pairing));
     if (/\bTB\b/i.test(pairing)) {
       autoTB = true;
       pairing = pairing.replace(/\bTB\b/i, "").trim();
@@ -421,6 +427,9 @@ function rowToTrip(row, year) {
   const days = parseInt(row.days, 10) || 1;
   let pairing = (row.pairing || "").trim();
   let autoTB = !!row.tb;
+  const stripped = stripTradeBoardTooltip(pairing);
+  pairing = stripped.pairing;
+  if (stripped.autoTB) autoTB = true;
   if (/\bTB\b/i.test(pairing)) {
     autoTB = true;
     pairing = pairing.replace(/\bTB\b/i, "").trim();
