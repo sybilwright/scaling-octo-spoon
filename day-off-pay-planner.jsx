@@ -1724,6 +1724,30 @@ export default function DayOffPayPlanner() {
     return false;
   }
 
+  // violatesRestRule only catches conflicts against what's already live (dutyReportByDate/
+  // dutyArriveByDate come from liveTrips) -- it has no way to see a conflict against some OTHER
+  // still-pending suggestion, since that trip isn't on the schedule yet either. A "possible add"
+  // unlocked by a swap can look perfectly clean on its own and still not actually fit once you
+  // also accept some other Add sitting right next to it in the Opentime pot -- this finds that
+  // case so it can be flagged with a note instead of silently letting both look independently fine.
+  function findAdjacentRestConflict(t, candidates) {
+    if (!t.dateKeys || !t.dateKeys.length) return null;
+    const tStart = t.dateKeys[0], tEnd = t.dateKeys[t.dateKeys.length - 1];
+    for (const other of candidates) {
+      if (!other || other.id === t.id || !other.dateKeys || !other.dateKeys.length) continue;
+      const oStart = other.dateKeys[0], oEnd = other.dateKeys[other.dateKeys.length - 1];
+      if (adjacentDateKey(tStart, -1) === oEnd && other.arrive && t.report) {
+        const rest = restHours(oEnd, other.arrive, tStart, t.report);
+        if (rest != null && rest < MIN_REST_HOURS) return other;
+      }
+      if (adjacentDateKey(tEnd, 1) === oStart && other.report && t.arrive) {
+        const rest = restHours(tEnd, t.arrive, oStart, other.report);
+        if (rest != null && rest < MIN_REST_HOURS) return other;
+      }
+    }
+    return null;
+  }
+
   const droppableTrips = useMemo(() => {
     if (!scheduleParsed) return [];
     const injectedKeys = new Set(injectedTrips.map(tripKey));
@@ -2962,12 +2986,25 @@ export default function DayOffPayPlanner() {
                                   const isSel = selected.has(t.id);
                                   const isAcc = acceptedAdds.has(t.id);
                                   const accBlocked = !swapChecked || acceptedConflicts(t);
+                                  // eligibleSorted trips are already-known-time pot/board candidates the schedule
+                                  // itself has no idea about yet (they're not live), so violatesRest can't see a
+                                  // conflict against them -- this catches it separately so it can be flagged
+                                  // instead of two independently-clean-looking Adds silently not actually fitting
+                                  // together once both are accepted in FLICA.
+                                  const restConflict = findAdjacentRestConflict(t, [...eligibleSorted, ...unlockedAdds]);
                                   return (
                                     <tr key={t.id} style={{ opacity: swapChecked ? 1 : 0.5 }}>
                                       <td><input type="checkbox" checked={isSel} disabled={!swapChecked} onChange={() => toggleSelect(t)} /></td>
                                       <td><input type="checkbox" checked={isAcc} disabled={accBlocked} onChange={() => toggleAcceptedAdd(t)} /></td>
                                       <td><input type="checkbox" checked={false} onChange={() => toggleDeniedAdd(t)} /></td>
-                                      <td style={{ color: "var(--text-primary)" }}>{t.pairing}</td>
+                                      <td style={{ color: "var(--text-primary)" }}>
+                                        {t.pairing}
+                                        {restConflict && (
+                                          <div style={{ fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
+                                            Wouldn't currently fit in FLICA — not enough rest against {restConflict.pairing} ({restConflict.dateTok}), also shown as available.
+                                          </div>
+                                        )}
+                                      </td>
                                       <td>{t.dateTok} +{t.days - 1}d</td>
                                       <td>{formatHours(t.creditHours)}</td>
                                       <td style={{ color: "var(--teal-bright)" }}>{t.pay != null ? formatMoney(t.pay) : "—"}</td>

@@ -2016,6 +2016,23 @@ function DayOffPayPlanner() {
     }
     return false;
   }
+  function findAdjacentRestConflict(t, candidates) {
+    if (!t.dateKeys || !t.dateKeys.length) return null;
+    const tStart = t.dateKeys[0], tEnd = t.dateKeys[t.dateKeys.length - 1];
+    for (const other of candidates) {
+      if (!other || other.id === t.id || !other.dateKeys || !other.dateKeys.length) continue;
+      const oStart = other.dateKeys[0], oEnd = other.dateKeys[other.dateKeys.length - 1];
+      if (adjacentDateKey(tStart, -1) === oEnd && other.arrive && t.report) {
+        const rest = restHours(oEnd, other.arrive, tStart, t.report);
+        if (rest != null && rest < MIN_REST_HOURS) return other;
+      }
+      if (adjacentDateKey(tEnd, 1) === oStart && other.report && t.arrive) {
+        const rest = restHours(tEnd, t.arrive, oStart, other.report);
+        if (rest != null && rest < MIN_REST_HOURS) return other;
+      }
+    }
+    return null;
+  }
   const droppableTrips = useMemo(() => {
     if (!scheduleParsed) return [];
     const injectedKeys = new Set(injectedTrips.map(tripKey));
@@ -2633,7 +2650,8 @@ function DayOffPayPlanner() {
       const isSel = selected.has(t.id);
       const isAcc = acceptedAdds.has(t.id);
       const accBlocked = !swapChecked || acceptedConflicts(t);
-      return /* @__PURE__ */ React.createElement("tr", { key: t.id, style: { opacity: swapChecked ? 1 : 0.5 } }, /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: isSel, disabled: !swapChecked, onChange: () => toggleSelect(t) })), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: isAcc, disabled: accBlocked, onChange: () => toggleAcceptedAdd(t) })), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: false, onChange: () => toggleDeniedAdd(t) })), /* @__PURE__ */ React.createElement("td", { style: { color: "var(--text-primary)" } }, t.pairing), /* @__PURE__ */ React.createElement("td", null, t.dateTok, " +", t.days - 1, "d"), /* @__PURE__ */ React.createElement("td", null, formatHours(t.creditHours)), /* @__PURE__ */ React.createElement("td", { style: { color: "var(--teal-bright)" } }, t.pay != null ? formatMoney(t.pay) : "\u2014"), /* @__PURE__ */ React.createElement("td", null, t.perDay != null ? formatMoney(t.perDay) : "\u2014"));
+      const restConflict = findAdjacentRestConflict(t, [...eligibleSorted, ...unlockedAdds]);
+      return /* @__PURE__ */ React.createElement("tr", { key: t.id, style: { opacity: swapChecked ? 1 : 0.5 } }, /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: isSel, disabled: !swapChecked, onChange: () => toggleSelect(t) })), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: isAcc, disabled: accBlocked, onChange: () => toggleAcceptedAdd(t) })), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: false, onChange: () => toggleDeniedAdd(t) })), /* @__PURE__ */ React.createElement("td", { style: { color: "var(--text-primary)" } }, t.pairing, restConflict && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 } }, "Wouldn't currently fit in FLICA \u2014 not enough rest against ", restConflict.pairing, " (", restConflict.dateTok, "), also shown as available.")), /* @__PURE__ */ React.createElement("td", null, t.dateTok, " +", t.days - 1, "d"), /* @__PURE__ */ React.createElement("td", null, formatHours(t.creditHours)), /* @__PURE__ */ React.createElement("td", { style: { color: "var(--teal-bright)" } }, t.pay != null ? formatMoney(t.pay) : "\u2014"), /* @__PURE__ */ React.createElement("td", null, t.perDay != null ? formatMoney(t.perDay) : "\u2014"));
     })))) : /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-faint)", fontFamily: "var(--sans)", marginTop: 6 } }, "Nothing on the current Opentime pot fits fully inside these freed days yet.")));
   }))), multiSwapInOptions.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--mono)", fontSize: 13, color: "var(--text-muted)", marginBottom: 8 } }, "No single pickup covers these \u2014 combining two trips together as the swap-in"), multiSwapInOptions.map((row) => {
     const { pair: p, swapIns, rowKey, freedKeys } = row;
