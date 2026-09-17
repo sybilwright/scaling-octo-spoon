@@ -418,12 +418,19 @@ function normalizeScheduleExport(text) {
 }
 
 const VACATION_CREDIT_HOURS = 3;
+const PED_CREDIT_HOURS = 3.5;
+// Every one of these is a protected day off -- never a valid pickup target, can never be worked
+// over -- but they don't all carry the same credit. VAC/VAX and PED are each credited at their
+// own flat rate; SICK/SIC/SNG/USIC/ING carry no credit at all. "ING" and "SICK" are the same
+// thing under two different names FLICA uses depending on export/paste source.
+const PROTECTED_DAY_CREDIT = { VAC: VACATION_CREDIT_HOURS, VAX: VACATION_CREDIT_HOURS, PED: PED_CREDIT_HOURS, SICK: 0, SIC: 0, SNG: 0, USIC: 0, ING: 0 };
 
 function parseSchedule(text, year, month) {
   const rawLines = normalizeScheduleExport(text).split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
   const trips = [];
   const daysOff = new Set();
   const vacationDays = new Set();
+  const protectedDayCodes = new Map();
   let summary = { credit: null, block: null, daysOffCount: null };
   let current = null;
   const pairingRe = /^[A-Z][A-Z0-9]{3,7}$/;
@@ -447,9 +454,10 @@ function parseSchedule(text, year, month) {
     if (rest.length && /^\d+(\.\d+)?$/.test(rest[rest.length - 1])) rest = rest.slice(0, -1);
     const key = dateKey(year, month, dayNum);
 
-    if (rest.length === 1 && /^(VAC|VAX)$/i.test(rest[0])) {
+    if (rest.length === 1 && /^(VAC|VAX|PED|SICK|SIC|SNG|USIC|ING)$/i.test(rest[0])) {
       daysOff.add(key);
       vacationDays.add(key);
+      protectedDayCodes.set(key, rest[0].toUpperCase());
       if (current) { trips.push(current); current = null; }
       continue;
     }
@@ -470,7 +478,7 @@ function parseSchedule(text, year, month) {
     }
   }
   if (current) trips.push(current);
-  return { trips, daysOff, vacationDays, summary };
+  return { trips, daysOff, vacationDays, protectedDayCodes, summary };
 }
 
 function scheduleTripDateKeys(trip) {
@@ -493,7 +501,7 @@ function buildDestinations(layover, days) {
   return dests;
 }
 
-function renderFlicaCalendar(trips, daysOffCount, year, month, credit, block, blockMayBeInaccurate, vacationDates) {
+function renderFlicaCalendar(trips, daysOffCount, year, month, credit, block, blockMayBeInaccurate, vacationDates, protectedDayCodes) {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const byDay = new Map();
   trips.forEach((t) => {
@@ -509,7 +517,8 @@ function renderFlicaCalendar(trips, daysOffCount, year, month, credit, block, bl
   for (let day = 1; day <= daysInMonth; day++) {
     const dow = DOW[new Date(year, month, day).getDay()];
     const entry = byDay.get(day);
-    if (vacationDates && vacationDates.has(dateKey(year, month, day))) lines.push(`${dow} ${pad2(day)} VAC`);
+    const dk = dateKey(year, month, day);
+    if (vacationDates && vacationDates.has(dk)) lines.push(`${dow} ${pad2(day)} ${(protectedDayCodes && protectedDayCodes.get(dk)) || "VAC"}`);
     else if (!entry) lines.push(`${dow} ${pad2(day)}`);
     else if (entry.pairing) lines.push(`${dow} ${pad2(day)} ${entry.pairing} ${entry.dest}`.trimEnd());
     else lines.push(`${dow} ${pad2(day)}    ${entry.dest}`.trimEnd());
@@ -1347,7 +1356,7 @@ export default function DayOffPayPlanner({ session }) {
       daysOff: [...daysOff],
       wantedText, wantedWeekdays: [...wantedWeekdays], minReport, maxArrive, applyTimePref,
       scheduleText,
-      scheduleParsed: scheduleParsed ? { trips: scheduleParsed.trips, daysOff: [...scheduleParsed.daysOff], vacationDays: [...scheduleParsed.vacationDays], summary: scheduleParsed.summary } : null,
+      scheduleParsed: scheduleParsed ? { trips: scheduleParsed.trips, daysOff: [...scheduleParsed.daysOff], vacationDays: [...scheduleParsed.vacationDays], protectedDayCodes: [...(scheduleParsed.protectedDayCodes || new Map()).entries()], summary: scheduleParsed.summary } : null,
       sdoFlags: [...sdoFlags], premiumFlags: [...premiumFlags], lockedFlags: [...lockedFlags],
       gridText, manualGridRows, gridParsed: gridParsed ? { ...gridParsed, grid: [...gridParsed.grid.entries()] } : null,
       openText, openParsed, imageRows,
@@ -1435,7 +1444,7 @@ export default function DayOffPayPlanner({ session }) {
       if (d.maxArrive != null) setMaxArrive(d.maxArrive);
       if (d.applyTimePref != null) setApplyTimePref(d.applyTimePref);
       if (d.scheduleText != null) setScheduleText(d.scheduleText);
-      if (d.scheduleParsed) setScheduleParsed({ trips: d.scheduleParsed.trips, daysOff: new Set(d.scheduleParsed.daysOff), vacationDays: new Set(d.scheduleParsed.vacationDays || []), summary: d.scheduleParsed.summary });
+      if (d.scheduleParsed) setScheduleParsed({ trips: d.scheduleParsed.trips, daysOff: new Set(d.scheduleParsed.daysOff), vacationDays: new Set(d.scheduleParsed.vacationDays || []), protectedDayCodes: new Map(d.scheduleParsed.protectedDayCodes || []), summary: d.scheduleParsed.summary });
       if (d.sdoFlags) setSdoFlags(new Set(d.sdoFlags));
       if (d.premiumFlags) setPremiumFlags(new Set(d.premiumFlags));
       if (d.lockedFlags) setLockedFlags(new Set(d.lockedFlags));
@@ -1734,6 +1743,7 @@ export default function DayOffPayPlanner({ session }) {
   // VAC/VAX days count as days off but can never be worked over — excluded from every
   // Add/swap-in eligibility check separately from the ordinary days-off availability check.
   const vacationDateKeys = useMemo(() => (scheduleParsed ? scheduleParsed.vacationDays : new Set()), [scheduleParsed]);
+  const protectedDayCodes = useMemo(() => (scheduleParsed && scheduleParsed.protectedDayCodes ? scheduleParsed.protectedDayCodes : new Map()), [scheduleParsed]);
   function overlapsVacation(dateKeys) { return dateKeys.some((k) => vacationDateKeys.has(k)); }
 
   // Only injected (Open Time/Trade Board sourced) trips carry known clock times — the original
@@ -1794,14 +1804,14 @@ export default function DayOffPayPlanner({ session }) {
 
   const originalCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
-    return renderFlicaCalendar(scheduleParsed.trips, scheduleParsed.daysOff.size, year, month, scheduleParsed.summary.credit, scheduleParsed.summary.block, false, scheduleParsed.vacationDays);
+    return renderFlicaCalendar(scheduleParsed.trips, scheduleParsed.daysOff.size, year, month, scheduleParsed.summary.credit, scheduleParsed.summary.block, false, scheduleParsed.vacationDays, scheduleParsed.protectedDayCodes);
   }, [scheduleParsed, year, month]);
 
   const updatedCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
     const offCountThisMonth = [...daysOff].filter((k) => k.startsWith(`${year}-${pad2(month + 1)}`)).length;
-    return renderFlicaCalendar(liveTrips, offCountThisMonth, year, month, baselineCredit, scheduleParsed.summary.block, true, vacationDateKeys);
-  }, [scheduleParsed, liveTrips, daysOff, year, month, baselineCredit, vacationDateKeys]);
+    return renderFlicaCalendar(liveTrips, offCountThisMonth, year, month, baselineCredit, scheduleParsed.summary.block, true, vacationDateKeys, protectedDayCodes);
+  }, [scheduleParsed, liveTrips, daysOff, year, month, baselineCredit, vacationDateKeys, protectedDayCodes]);
 
   function passesTimePref(t) {
     if (!applyTimePref) return true;
@@ -2250,8 +2260,8 @@ export default function DayOffPayPlanner({ session }) {
   const plannedCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
     const offCountThisMonth = [...plannedDaysOffSet].filter((k) => k.startsWith(`${year}-${pad2(month + 1)}`)).length;
-    return renderFlicaCalendar(plannedTrips, offCountThisMonth, year, month, workedHours.toFixed(2), scheduleParsed.summary.block, true, vacationDateKeys);
-  }, [scheduleParsed, plannedTrips, plannedDaysOffSet, year, month, workedHours, vacationDateKeys]);
+    return renderFlicaCalendar(plannedTrips, offCountThisMonth, year, month, workedHours.toFixed(2), scheduleParsed.summary.block, true, vacationDateKeys, protectedDayCodes);
+  }, [scheduleParsed, plannedTrips, plannedDaysOffSet, year, month, workedHours, vacationDateKeys, protectedDayCodes]);
 
   // baselineHours already includes accepted Adds' credit (added at acceptance time), so the
   // actual total just needs the accepted SDO bonus added on top. The planned total layers the
@@ -2477,13 +2487,26 @@ export default function DayOffPayPlanner({ session }) {
           <span style={{ fontSize: 11, color: "var(--text-faint)" }}>or import a CSV:</span>
           <input type="file" accept=".csv,text/csv" onChange={handleScheduleCSV} style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-secondary)" }} />
         </div>
-        <div className="hint">One line per day: weekday, day number, then pairing code (first day of a trip only) and destination. A day with nothing after the date is a day off. A "VAC" or "VAX" day counts as off but can never be worked over. Trailing "Credit" line auto-fills your baseline above. A CSV import parses automatically.</div>
+        <div className="hint">One line per day: weekday, day number, then pairing code (first day of a trip only) and destination. A day with nothing after the date is a day off. A "VAC", "VAX", "PED", "SICK", "SIC", "SNG", "USIC", or "ING" day counts as off but can never be worked over ("ING" and "SICK" are the same thing under two names). VAC/VAX credit at {VACATION_CREDIT_HOURS}h and PED at {PED_CREDIT_HOURS}h each; the rest carry no credit. Trailing "Credit" line auto-fills your baseline above. A CSV import parses automatically.</div>
 
         {scheduleParsed && (
           <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
             {scheduleParsed.trips.length} trip{scheduleParsed.trips.length === 1 ? "" : "s"} found, {scheduleParsed.daysOff.size} day{scheduleParsed.daysOff.size === 1 ? "" : "s"} off parsed
             {scheduleParsed.summary.credit != null && <> · Credit line read as {scheduleParsed.summary.credit}h</>}
-            {scheduleParsed.vacationDays.size > 0 && <> · {scheduleParsed.vacationDays.size} VAC day{scheduleParsed.vacationDays.size === 1 ? "" : "s"} ({(scheduleParsed.vacationDays.size * VACATION_CREDIT_HOURS).toFixed(1)}h credit at {VACATION_CREDIT_HOURS}h/day, protected from being worked over)</>}
+            {scheduleParsed.vacationDays.size > 0 && (() => {
+              let vacCount = 0, pedCount = 0, sickCount = 0, totalCredit = 0;
+              (scheduleParsed.protectedDayCodes || new Map()).forEach((code) => {
+                totalCredit += PROTECTED_DAY_CREDIT[code] || 0;
+                if (code === "VAC" || code === "VAX") vacCount++;
+                else if (code === "PED") pedCount++;
+                else sickCount++;
+              });
+              const parts = [];
+              if (vacCount > 0) parts.push(`${vacCount} VAC/VAX`);
+              if (pedCount > 0) parts.push(`${pedCount} PED`);
+              if (sickCount > 0) parts.push(`${sickCount} Sick`);
+              return <> · {parts.join(" + ")} day{scheduleParsed.vacationDays.size === 1 ? "" : "s"} ({totalCredit.toFixed(1)}h credit total, protected from being worked over)</>;
+            })()}
             {scheduleParsed.summary.daysOffCount != null && scheduleParsed.summary.daysOffCount !== scheduleParsed.daysOff.size && (
               <span style={{ color: "var(--amber)" }}> · the file's own "Days Off" line says {scheduleParsed.summary.daysOffCount}, which doesn't match — worth a quick check of the source data.</span>
             )}
