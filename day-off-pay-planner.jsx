@@ -2059,7 +2059,23 @@ export default function DayOffPayPlanner() {
   const acceptedTrips = enrichedOpen.filter((t) => acceptedAdds.has(t.id));
   const acceptedCreditHours = acceptedTrips.reduce((s, t) => s + (t.creditHours || 0), 0);
   const acceptedBonusPay = acceptedTrips.reduce((s, t) => s + (t.pay || 0), 0);
-  const totalCreditHours = projectedTrips.reduce((s, t) => s + (t.creditHours || 0), 0);
+  // Add credit is straightforward (each trip's own creditHours), but a Planned swap only shows up
+  // here if it actually survived the priority resolution above (projection.includedSwapKeys) --
+  // a swap that lost out to a higher-priority conflicting pick contributes nothing, same as it
+  // contributes nothing to the calendar grid itself. Without this, checking "Planned" on a swap
+  // moved the calendar's worked days around but left the credit-hours total underneath it frozen,
+  // since that total only ever summed Add trips.
+  const totalSwapCreditDelta = useMemo(() => {
+    let sum = 0;
+    projection.includedSwapKeys.forEach((key) => {
+      const row = combinedSwapRowsByKey.get(key);
+      if (!row) return;
+      const adj = computeSwapCreditAdjustment(row.pair, row.swapIns);
+      if (adj != null) sum += adj;
+    });
+    return sum;
+  }, [projection.includedSwapKeys, combinedSwapRowsByKey, sdoTripCredits]);
+  const totalCreditHours = projectedTrips.reduce((s, t) => s + (t.creditHours || 0), 0) + totalSwapCreditDelta;
   const totalBonusPay = projectedTrips.reduce((s, t) => s + (t.pay || 0), 0);
   const baselineHours = Math.max(parseFloat(baselineCredit) || 0, 0);
   const workedHours = baselineHours + totalCreditHours;
