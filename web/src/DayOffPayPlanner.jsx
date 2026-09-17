@@ -418,12 +418,13 @@ function normalizeScheduleExport(text) {
 }
 
 const VACATION_CREDIT_HOURS = 3;
-const PED_CREDIT_HOURS = 3.5;
+const PED_CREDIT_HOURS = 3.5; // PED = Personal Emergency Day (paid)
 // Every one of these is a protected day off -- never a valid pickup target, can never be worked
 // over -- but they don't all carry the same credit. VAC/VAX and PED are each credited at their
-// own flat rate; SICK/SIC/SNG/USIC/ING carry no credit at all. "ING" and "SICK" are the same
-// thing under two different names FLICA uses depending on export/paste source.
-const PROTECTED_DAY_CREDIT = { VAC: VACATION_CREDIT_HOURS, VAX: VACATION_CREDIT_HOURS, PED: PED_CREDIT_HOURS, SICK: 0, SIC: 0, SNG: 0, USIC: 0, ING: 0 };
+// own flat rate; SICK/SIC/SNG/USIC/ING/PUD carry no credit at all. "ING" and "SICK" are the same
+// thing under two different names FLICA uses depending on export/paste source, and so is PUD --
+// Personal Emergency Day Unpaid, i.e. the unpaid counterpart to PED, coded the same as SICK.
+const PROTECTED_DAY_CREDIT = { VAC: VACATION_CREDIT_HOURS, VAX: VACATION_CREDIT_HOURS, PED: PED_CREDIT_HOURS, SICK: 0, SIC: 0, SNG: 0, USIC: 0, ING: 0, PUD: 0 };
 
 function parseSchedule(text, year, month) {
   const rawLines = normalizeScheduleExport(text).split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
@@ -454,7 +455,7 @@ function parseSchedule(text, year, month) {
     if (rest.length && /^\d+(\.\d+)?$/.test(rest[rest.length - 1])) rest = rest.slice(0, -1);
     const key = dateKey(year, month, dayNum);
 
-    if (rest.length === 1 && /^(VAC|VAX|PED|SICK|SIC|SNG|USIC|ING)$/i.test(rest[0])) {
+    if (rest.length === 1 && /^(VAC|VAX|PED|SICK|SIC|SNG|USIC|ING|PUD)$/i.test(rest[0])) {
       daysOff.add(key);
       vacationDays.add(key);
       protectedDayCodes.set(key, rest[0].toUpperCase());
@@ -2487,7 +2488,7 @@ export default function DayOffPayPlanner({ session }) {
           <span style={{ fontSize: 11, color: "var(--text-faint)" }}>or import a CSV:</span>
           <input type="file" accept=".csv,text/csv" onChange={handleScheduleCSV} style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-secondary)" }} />
         </div>
-        <div className="hint">One line per day: weekday, day number, then pairing code (first day of a trip only) and destination. A day with nothing after the date is a day off. A "VAC", "VAX", "PED", "SICK", "SIC", "SNG", "USIC", or "ING" day counts as off but can never be worked over ("ING" and "SICK" are the same thing under two names). VAC/VAX credit at {VACATION_CREDIT_HOURS}h and PED at {PED_CREDIT_HOURS}h each; the rest carry no credit. Trailing "Credit" line auto-fills your baseline above. A CSV import parses automatically.</div>
+        <div className="hint">One line per day: weekday, day number, then pairing code (first day of a trip only) and destination. A day with nothing after the date is a day off. A "VAC", "VAX", "PED", "SICK", "SIC", "SNG", "USIC", "ING", or "PUD" day counts as off but can never be worked over ("ING" and "PUD" both code the same as "SICK"). VAC/VAX credit at {VACATION_CREDIT_HOURS}h and PED (Personal Emergency Day) at {PED_CREDIT_HOURS}h each; the rest — including PUD, PED's unpaid counterpart — carry no credit. Trailing "Credit" line auto-fills your baseline above. A CSV import parses automatically.</div>
 
         {scheduleParsed && (
           <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
