@@ -2068,6 +2068,39 @@ export default function DayOffPayPlanner({ session }) {
     return new Map([...swapRowsByKey, ...multiSwapRowsByKey]);
   }, [swapRowsByKey, multiSwapRowsByKey]);
 
+  // Days a currently-Planned (checked, not yet Approved) swap's swap-in would occupy. Planning
+  // a swap doesn't touch daysOff itself -- only Approving does -- so an Add landing on one of
+  // these days still looks perfectly fine on its own right now, but would stop being possible
+  // the moment that specific swap actually goes through. Kept purely informational: Planned is
+  // easy to uncheck, so this never removes or disables the Add, just names which swap causes it.
+  const plannedSwapOccupiedBy = useMemo(() => {
+    const m = new Map();
+    selectedSwaps.forEach((rowKey) => {
+      const row = combinedSwapRowsByKey.get(rowKey);
+      if (!row) return;
+      const { pair, swapIns } = row;
+      const label = `Drop ${pair.a.pairing} + ${pair.b.pairing} → swap into ${swapIns.map((si) => si.pairing).join(" + ")}`;
+      const swapInIds = new Set(swapIns.map((si) => si.id));
+      swapIns.forEach((si) => {
+        tripDateKeys(si).forEach((k) => {
+          if (!m.has(k)) m.set(k, []);
+          m.get(k).push({ label, rowKey, swapInIds });
+        });
+      });
+    });
+    return m;
+  }, [selectedSwaps, combinedSwapRowsByKey]);
+  function getPlannedSwapConflict(t) {
+    if (!t.dateKeys) return null;
+    for (const k of t.dateKeys) {
+      const entries = plannedSwapOccupiedBy.get(k);
+      if (!entries) continue;
+      const hit = entries.find((e) => !e.swapInIds.has(t.id));
+      if (hit) return hit;
+    }
+    return null;
+  }
+
   // Planned (but not yet Approved) swaps don't touch baselineCredit -- only accepting one does.
   // To warn before letting the user plan past the 60-hour floor, this sums what *would* change
   // if every currently-Planned swap were accepted, using the same computation Accept itself
@@ -2889,12 +2922,20 @@ export default function DayOffPayPlanner({ session }) {
                   const isSel = selected.has(t.id);
                   const isAcc = acceptedAdds.has(t.id);
                   const accBlocked = acceptedConflicts(t);
+                  const swapConflict = getPlannedSwapConflict(t);
                   return (
                     <tr key={t.id}>
                       <td><input type="checkbox" checked={isSel} onChange={() => toggleSelect(t)} /></td>
                       <td><input type="checkbox" checked={isAcc} disabled={accBlocked} onChange={() => toggleAcceptedAdd(t)} /></td>
                       <td><input type="checkbox" checked={false} onChange={() => toggleDeniedAdd(t)} /></td>
-                      <td style={{ color: "var(--text-primary)" }}>{t.pairing}</td>
+                      <td style={{ color: "var(--text-primary)" }}>
+                        {t.pairing}
+                        {swapConflict && (
+                          <div style={{ fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
+                            Not possible right now — {swapConflict.label} would take over this day if approved.
+                          </div>
+                        )}
+                      </td>
                       <td>{t.dateTok} +{t.days - 1}d</td>
                       <td>{formatHours(t.creditHours)}</td>
                       <td style={{ color: "var(--teal-bright)" }}>{t.pay != null ? formatMoney(t.pay) : "—"}</td>
@@ -2932,15 +2973,25 @@ export default function DayOffPayPlanner({ session }) {
             {addsNearMissSectionOpen && <table style={{ marginBottom: 24 }}>
               <thead><tr><th>Pairing</th><th>Dates</th><th>Credit</th><th>Needs</th><th></th></tr></thead>
               <tbody>
-                {nearMiss.map((t) => (
-                  <tr key={t.id}>
-                    <td style={{ color: "var(--text-primary)" }}>{t.pairing}</td>
-                    <td>{t.dateTok} +{t.days - 1}d</td>
-                    <td>{formatHours(t.creditHours)}</td>
-                    <td style={{ color: "var(--amber-strong)" }}>{t.missing.length} more day{t.missing.length === 1 ? "" : "s"} off</td>
-                    <td><button className="action small" onClick={() => addDaysOff(t.missing)}>Mark those days off</button></td>
-                  </tr>
-                ))}
+                {nearMiss.map((t) => {
+                  const swapConflict = getPlannedSwapConflict(t);
+                  return (
+                    <tr key={t.id}>
+                      <td style={{ color: "var(--text-primary)" }}>
+                        {t.pairing}
+                        {swapConflict && (
+                          <div style={{ fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
+                            Not possible right now — {swapConflict.label} would take over this day if approved.
+                          </div>
+                        )}
+                      </td>
+                      <td>{t.dateTok} +{t.days - 1}d</td>
+                      <td>{formatHours(t.creditHours)}</td>
+                      <td style={{ color: "var(--amber-strong)" }}>{t.missing.length} more day{t.missing.length === 1 ? "" : "s"} off</td>
+                      <td><button className="action small" onClick={() => addDaysOff(t.missing)}>Mark those days off</button></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>}
           </>
