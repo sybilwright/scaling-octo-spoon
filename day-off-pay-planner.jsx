@@ -692,6 +692,7 @@ export default function DayOffPayPlanner() {
   const [scheduleParsed, setScheduleParsed] = useState(null);
   const [sdoFlags, setSdoFlags] = useState(new Set());
   const [premiumFlags, setPremiumFlags] = useState(new Set());
+  const [lockedFlags, setLockedFlags] = useState(new Set());
   const [sdoTripCredits, setSdoTripCredits] = useState(new Map());
   function setSdoTripCredit(key, value) {
     setSdoTripCredits((prev) => { const n = new Map(prev); if (value === "") n.delete(key); else n.set(key, value); return n; });
@@ -1184,6 +1185,11 @@ export default function DayOffPayPlanner() {
   const [tradeFormError, setTradeFormError] = useState(null);
   const [tradeSectionOpen, setTradeSectionOpen] = useState(false);
   const [openPotViewerOpen, setOpenPotViewerOpen] = useState(false);
+  const [addsReadySectionOpen, setAddsReadySectionOpen] = useState(true);
+  const [addsNearMissSectionOpen, setAddsNearMissSectionOpen] = useState(true);
+  const [swapsSectionOpen, setSwapsSectionOpen] = useState(true);
+  const [tbPostSectionOpen, setTbPostSectionOpen] = useState(true);
+  const [tbAddSectionOpen, setTbAddSectionOpen] = useState(true);
   const [allowSdoTrade, setAllowSdoTrade] = useState(false);
   const [tbAddAccepted, setTbAddAccepted] = useState(new Set());
   const [tbDropRequested, setTbDropRequested] = useState(new Set());
@@ -1342,7 +1348,7 @@ export default function DayOffPayPlanner() {
       wantedText, wantedWeekdays: [...wantedWeekdays], minReport, maxArrive, applyTimePref,
       scheduleText,
       scheduleParsed: scheduleParsed ? { trips: scheduleParsed.trips, daysOff: [...scheduleParsed.daysOff], vacationDays: [...scheduleParsed.vacationDays], summary: scheduleParsed.summary } : null,
-      sdoFlags: [...sdoFlags], premiumFlags: [...premiumFlags],
+      sdoFlags: [...sdoFlags], premiumFlags: [...premiumFlags], lockedFlags: [...lockedFlags],
       gridText, manualGridRows, gridParsed: gridParsed ? { ...gridParsed, grid: [...gridParsed.grid.entries()] } : null,
       openText, openParsed, imageRows,
       extraBoards: extraBoards.map((b) => ({ ...b, imgPreview: null, imgBase64: null, imgError: null, imgLoading: false })),
@@ -1360,6 +1366,7 @@ export default function DayOffPayPlanner() {
       sdoTripCredits: [...sdoTripCredits.entries()],
       notesOpen, notesText, plannerOpen, dayPlans, maxConsecutiveDaysPref, minRestDaysPref,
       tradeSectionOpen, allowSdoTrade, openPotViewerOpen,
+      addsReadySectionOpen, addsNearMissSectionOpen, swapsSectionOpen, tbPostSectionOpen, tbAddSectionOpen,
       calVisible, theme,
     };
   }
@@ -1395,6 +1402,7 @@ export default function DayOffPayPlanner() {
       if (d.scheduleParsed) setScheduleParsed({ trips: d.scheduleParsed.trips, daysOff: new Set(d.scheduleParsed.daysOff), vacationDays: new Set(d.scheduleParsed.vacationDays || []), summary: d.scheduleParsed.summary });
       if (d.sdoFlags) setSdoFlags(new Set(d.sdoFlags));
       if (d.premiumFlags) setPremiumFlags(new Set(d.premiumFlags));
+      if (d.lockedFlags) setLockedFlags(new Set(d.lockedFlags));
       if (d.gridText != null) setGridText(d.gridText);
       if (d.gridParsed) setGridParsed({ ...d.gridParsed, grid: new Map(d.gridParsed.grid) });
       if (d.manualGridRows) setManualGridRows(d.manualGridRows);
@@ -1430,6 +1438,11 @@ export default function DayOffPayPlanner() {
       if (d.minRestDaysPref != null) setMinRestDaysPref(d.minRestDaysPref);
       if (d.tradeSectionOpen != null) setTradeSectionOpen(d.tradeSectionOpen);
       if (d.openPotViewerOpen != null) setOpenPotViewerOpen(d.openPotViewerOpen);
+      if (d.addsReadySectionOpen != null) setAddsReadySectionOpen(d.addsReadySectionOpen);
+      if (d.addsNearMissSectionOpen != null) setAddsNearMissSectionOpen(d.addsNearMissSectionOpen);
+      if (d.swapsSectionOpen != null) setSwapsSectionOpen(d.swapsSectionOpen);
+      if (d.tbPostSectionOpen != null) setTbPostSectionOpen(d.tbPostSectionOpen);
+      if (d.tbAddSectionOpen != null) setTbAddSectionOpen(d.tbAddSectionOpen);
       if (d.allowSdoTrade != null) setAllowSdoTrade(d.allowSdoTrade);
       if (d.calVisible) setCalVisible(d.calVisible);
       if (d.theme) setTheme(d.theme);
@@ -1710,11 +1723,12 @@ export default function DayOffPayPlanner() {
       const key = tripKey(t);
       const isSdo = sdoFlags.has(key);
       const isPremium = premiumFlags.has(key);
+      const isLocked = lockedFlags.has(key);
       const wantsOverlap = keys.some((k) => wantedOff.has(k));
       const isInjected = injectedKeys.has(key);
-      return { ...t, keys, droppable: !blocker && !isSdo, gridBlocked: !!blocker, blocker, key, isSdo, isPremium, wantsOverlap, isInjected };
+      return { ...t, keys, droppable: !blocker && !isSdo && !isLocked, gridBlocked: !!blocker, blocker, key, isSdo, isPremium, isLocked, wantsOverlap, isInjected };
     });
-  }, [scheduleParsed, liveTrips, injectedTrips, combinedGrid, sdoFlags, premiumFlags, wantedOff]);
+  }, [scheduleParsed, liveTrips, injectedTrips, combinedGrid, sdoFlags, premiumFlags, lockedFlags, wantedOff]);
 
   const originalCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
@@ -1809,7 +1823,7 @@ export default function DayOffPayPlanner() {
   // A trip doesn't need to be fully green on its own to be part of a drop pair — only the days
   // that end up genuinely freed (not covered by whatever swap-in replaces them) need to be green.
   // SDO trips are still excluded outright, since dropping one gives back an already-earned bonus.
-  const swapRecs = droppableTrips.filter((t) => !t.isSdo);
+  const swapRecs = droppableTrips.filter((t) => !t.isSdo && !t.isLocked);
   const swapPairs = [];
   for (let i = 0; i < swapRecs.length; i++) {
     for (let j = i + 1; j < swapRecs.length; j++) {
@@ -1968,7 +1982,7 @@ export default function DayOffPayPlanner() {
 
   // A Trade Board post isn't a net removal of coverage — whoever picks it up takes over the
   // exact same days, so the Reserve Grid buffer is never actually affected. Only SDO/Premium matter here.
-  const tradePostCandidates = droppableTrips.filter((t) => !t.isSdo && !t.isPremium);
+  const tradePostCandidates = droppableTrips.filter((t) => !t.isSdo && !t.isPremium && !t.isLocked);
   const sdoExcludedCount = droppableTrips.filter((t) => t.isSdo).length;
   const gridBlockedCount = droppableTrips.filter((t) => !t.droppable && !t.isSdo && t.gridBlocked).length;
   const gridUnknownCount = droppableTrips.filter((t) => !t.droppable && !t.isSdo && !t.gridBlocked).length;
@@ -2333,7 +2347,7 @@ export default function DayOffPayPlanner() {
           <div style={{ marginBottom: 24 }}>
             <div className="h">Your trips — flag and check droppability</div>
             <table>
-              <thead><tr><th>Pairing</th><th>Dates</th><th>SDO</th><th>Credit hrs</th><th>Premium</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>Pairing</th><th>Dates</th><th>SDO</th><th>Credit hrs</th><th>Premium</th><th>Lock</th><th>Status</th><th></th></tr></thead>
               <tbody>
                 {droppableTrips.map((t, i) => (
                   <tr key={i}>
@@ -2355,8 +2369,10 @@ export default function DayOffPayPlanner() {
                       )}
                     </td>
                     <td><input type="checkbox" checked={t.isPremium} onChange={() => toggleFlag(setPremiumFlags, t.key)} /></td>
+                    <td><input type="checkbox" checked={t.isLocked} onChange={() => toggleFlag(setLockedFlags, t.key)} /></td>
                     <td style={{ color: t.droppable ? "var(--teal-bright)" : "var(--amber-strong)" }}>
-                      {t.isSdo ? "Already SDO — dropping forfeits its bonus"
+                      {t.isLocked ? "Locked — won't be offered for Swap or Trade Board"
+                        : t.isSdo ? "Already SDO — dropping forfeits its bonus"
                         : t.gridBlocked ? `Blocked — ${t.blocker.status} on ${t.blocker.key.slice(5)}`
                         : !hasGridData ? "Grid data needed"
                         : "All green — droppable" + (t.wantsOverlap ? " · frees a wanted day" : "")}
@@ -2366,7 +2382,7 @@ export default function DayOffPayPlanner() {
                 ))}
               </tbody>
             </table>
-            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium trips are flagged so swap and trade-board suggestions don't casually give away extra-value trips.</div>
+            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium trips are flagged so swap and trade-board suggestions don't casually give away extra-value trips. Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
           </div>
         )}
 
@@ -2661,8 +2677,11 @@ export default function DayOffPayPlanner() {
 
         {eligibleSorted.length > 0 && (
           <>
-            <div className="h">Adds — ready now, ranked by pay per day off used</div>
-            <table style={{ marginBottom: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setAddsReadySectionOpen((v) => !v)}>
+              <div className="h" style={{ marginBottom: 0 }}>Adds — ready now, ranked by pay per day off used</div>
+              <button className="action small" onClick={(e) => { e.stopPropagation(); setAddsReadySectionOpen((v) => !v); }}>{addsReadySectionOpen ? "Hide" : "Show"}</button>
+            </div>
+            {addsReadySectionOpen && <table style={{ marginBottom: 24 }}>
               <thead><tr><th>Planned</th><th>Approved</th><th>Denied</th><th>Pairing</th><th>Dates</th><th>Credit</th><th>Est. pay</th><th>$ / day off</th><th></th></tr></thead>
               <tbody>
                 {eligibleSorted.map((t) => {
@@ -2684,7 +2703,7 @@ export default function DayOffPayPlanner() {
                   );
                 })}
               </tbody>
-            </table>
+            </table>}
           </>
         )}
 
@@ -2705,8 +2724,11 @@ export default function DayOffPayPlanner() {
 
         {nearMiss.length > 0 && (
           <>
-            <div className="h">Adds — close, needs more days off marked</div>
-            <table style={{ marginBottom: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setAddsNearMissSectionOpen((v) => !v)}>
+              <div className="h" style={{ marginBottom: 0 }}>Adds — close, needs more days off marked</div>
+              <button className="action small" onClick={(e) => { e.stopPropagation(); setAddsNearMissSectionOpen((v) => !v); }}>{addsNearMissSectionOpen ? "Hide" : "Show"}</button>
+            </div>
+            {addsNearMissSectionOpen && <table style={{ marginBottom: 24 }}>
               <thead><tr><th>Pairing</th><th>Dates</th><th>Credit</th><th>Needs</th><th></th></tr></thead>
               <tbody>
                 {nearMiss.map((t) => (
@@ -2719,12 +2741,15 @@ export default function DayOffPayPlanner() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table>}
           </>
         )}
 
-        <div className="h">Swaps — every way to manufacture days off, grouped by what you'd swap into</div>
-        {(swapInGroups.length > 0 || multiSwapInOptions.length > 0) ? (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setSwapsSectionOpen((v) => !v)}>
+          <div className="h" style={{ marginBottom: 0 }}>Swaps — every way to manufacture days off, grouped by what you'd swap into</div>
+          <button className="action small" onClick={(e) => { e.stopPropagation(); setSwapsSectionOpen((v) => !v); }}>{swapsSectionOpen ? "Hide" : "Show"}</button>
+        </div>
+        {swapsSectionOpen && ((swapInGroups.length > 0 || multiSwapInOptions.length > 0) ? (
           <>
             {swapInGroups.map((group, gi) => (
               <div key={gi} style={{ marginBottom: 18 }}>
@@ -2883,7 +2908,7 @@ export default function DayOffPayPlanner() {
               ? `Only ${swapRecs.length} trip${swapRecs.length === 1 ? "" : "s"} on your schedule ${swapRecs.length === 1 ? "isn't" : "aren't"} flagged SDO — a drop needs at least two non-SDO trips to swap together, since FLICA won't let you give one up for nothing.`
               : "No open-time trip on the current board can cover the black/red days in any pair while also avoiding your other trips — try pasting more of the board."}
           </div>
-        )}
+        ))}
 
         {deniedSwapKeys.size > 0 && (
           <div style={{ marginBottom: 24 }}>
@@ -2905,8 +2930,11 @@ export default function DayOffPayPlanner() {
 
         {scheduleParsed && droppableTrips.length > 0 && (
           <>
-            <div className="h">Post to Trade Board — candidates</div>
-            {tradePostCandidates.length > 0 ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setTbPostSectionOpen((v) => !v)}>
+              <div className="h" style={{ marginBottom: 0 }}>Post to Trade Board — candidates</div>
+              <button className="action small" onClick={(e) => { e.stopPropagation(); setTbPostSectionOpen((v) => !v); }}>{tbPostSectionOpen ? "Hide" : "Show"}</button>
+            </div>
+            {tbPostSectionOpen && (tradePostCandidates.length > 0 ? (
               <table style={{ marginBottom: 24 }}>
                 <thead><tr><th>Requested</th><th>Approved</th><th>Pairing</th><th>Dates</th><th>Why</th></tr></thead>
                 <tbody>
@@ -2927,18 +2955,21 @@ export default function DayOffPayPlanner() {
               </table>
             ) : (
               <div className="hint" style={{ marginTop: 0 }}>
-                {droppableTrips.filter((t) => !t.isSdo).length === 0
-                  ? "All of your trips are flagged SDO, so there's nothing to post without giving back an already-earned bonus."
-                  : "Every non-SDO trip is flagged Premium — posting one would give away extra value, so none are suggested here."}
+                {droppableTrips.filter((t) => !t.isSdo && !t.isLocked).length === 0
+                  ? "Every remaining trip is either flagged SDO or locked, so there's nothing to post."
+                  : "Every remaining non-SDO, unlocked trip is flagged Premium — posting one would give away extra value, so none are suggested here."}
               </div>
-            )}
+            ))}
           </>
         )}
 
         {enrichedTrade.length > 0 && (
           <>
-            <div className="h">Add from Trade Board — no SDO, evaluate on credit/quality of life only</div>
-            <table style={{ marginBottom: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setTbAddSectionOpen((v) => !v)}>
+              <div className="h" style={{ marginBottom: 0 }}>Add from Trade Board — no SDO, evaluate on credit/quality of life only</div>
+              <button className="action small" onClick={(e) => { e.stopPropagation(); setTbAddSectionOpen((v) => !v); }}>{tbAddSectionOpen ? "Hide" : "Show"}</button>
+            </div>
+            {tbAddSectionOpen && <table style={{ marginBottom: 24 }}>
               <thead><tr><th>Requested</th><th>Approved</th><th>Pairing</th><th>Dates</th><th>Credit</th><th>Layover</th><th>Status</th></tr></thead>
               <tbody>
                 {enrichedTrade.slice().sort((a, b) => (b.creditHours || 0) - (a.creditHours || 0)).map((t) => {
@@ -2957,7 +2988,7 @@ export default function DayOffPayPlanner() {
                   );
                 })}
               </tbody>
-            </table>
+            </table>}
           </>
         )}
 
