@@ -2062,6 +2062,55 @@ export default function DayOffPayPlanner({ session }) {
     return baseline + plannedSwapCreditDelta + (alreadyCounted ? 0 : adj);
   }
 
+  // ---- Floor-fix suggestions: when a swap would drop worked hours under 60, surface the
+  // cheapest concrete way to add enough credit first so the swap clears the floor -- an Add,
+  // a Trade Board pickup, or a Bilateral Trade, each already-known-credit, never guessed at.
+  function bestFloorFit(items, shortfall, getCredit) {
+    let best = null;
+    items.forEach((it) => {
+      const c = getCredit(it);
+      if (c == null || c < shortfall) return;
+      if (best == null || c < getCredit(best)) best = it;
+    });
+    return best;
+  }
+  const floorFixTradeBoardCandidates = useMemo(() => enrichedTrade.filter((t) => t.feasible), [enrichedTrade]);
+  // Every (one of your droppable trips) x (every board/pot trip) combination, kept only where
+  // both credits are known -- same data limitation computeSwapCreditAdjustment already respects.
+  // Sorted ascending by net credit change so the cheapest fix for any shortfall is found first.
+  const floorFixBilateralCandidates = useMemo(() => {
+    const outgoingCandidates = droppableTrips.filter((t) => !t.isSdo && !t.isLocked && parseCreditToHours(sdoTripCredits.get(t.key)) != null);
+    const incomingCandidates = [
+      ...allOpenTrips.filter((t) => !t.autoTB && t.creditHours != null),
+      ...tradeParsed.trips.filter((t) => t.creditHours != null),
+    ];
+    const pairs = [];
+    outgoingCandidates.forEach((o) => {
+      const outCredit = parseCreditToHours(sdoTripCredits.get(o.key));
+      incomingCandidates.forEach((inc) => {
+        pairs.push({ outgoing: o, incoming: inc, outCredit, delta: (inc.creditHours || 0) - outCredit });
+      });
+    });
+    pairs.sort((a, b) => a.delta - b.delta);
+    return pairs;
+  }, [droppableTrips, sdoTripCredits, allOpenTrips, tradeParsed]);
+  function getFloorFixSuggestions(shortfall, excludeKeys) {
+    if (shortfall == null || shortfall <= 0) return [];
+    const suggestions = [];
+    const addFix = bestFloorFit(eligibleSorted, shortfall, (t) => t.creditHours);
+    if (addFix) suggestions.push({ label: `Accept the Add ${addFix.pairing} (${formatHours(addFix.creditHours)}) from the Opentime pot`, credit: addFix.creditHours });
+    const tbFix = bestFloorFit(floorFixTradeBoardCandidates, shortfall, (t) => t.creditHours);
+    if (tbFix) suggestions.push({ label: `Accept the Trade Board pickup ${tbFix.pairing} (${formatHours(tbFix.creditHours)})`, credit: tbFix.creditHours });
+    const bilateralFix = floorFixBilateralCandidates.find((p) => p.delta >= shortfall && !excludeKeys.includes(p.outgoing.key));
+    if (bilateralFix) {
+      suggestions.push({
+        label: `Trade away ${bilateralFix.outgoing.pairing} (${formatHours(bilateralFix.outCredit)}) for ${bilateralFix.incoming.pairing} (${formatHours(bilateralFix.incoming.creditHours)}) — net +${formatHours(bilateralFix.delta)}`,
+        credit: bilateralFix.delta,
+      });
+    }
+    return suggestions;
+  }
+
   // A Trade Board post isn't a net removal of coverage — whoever picks it up takes over the
   // exact same days, so the Reserve Grid buffer is never actually affected. Only SDO/Premium matter here.
   const tradePostCandidates = droppableTrips.filter((t) => !t.isSdo && !t.isPremium && !t.isLocked);
@@ -2905,11 +2954,27 @@ export default function DayOffPayPlanner({ session }) {
                           Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · includes a wanted day" : ""}
                         </div>
                       </div>
-                      {wouldViolateFloor && (
-                        <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 8 }}>
-                          Can't plan this swap — it would take your worked total to {floorProjection.toFixed(2)}h, under the 60h floor.
-                        </div>
-                      )}
+                      {wouldViolateFloor && (() => {
+                        const shortfall = 60 - floorProjection;
+                        const floorFixes = getFloorFixSuggestions(shortfall, [p.a.key, p.b.key]);
+                        return (
+                          <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 8 }}>
+                            Can't plan this swap — it would take your worked total to {floorProjection.toFixed(2)}h, under the 60h floor.
+                            {floorFixes.length > 0 ? (
+                              <div style={{ marginTop: 4 }}>
+                                Ways to clear the floor first:
+                                <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                                  {floorFixes.map((fx, i) => (
+                                    <li key={i}>{fx.label} — brings you to {(floorProjection + fx.credit).toFixed(2)}h</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ) : (
+                              <div style={{ marginTop: 4, fontStyle: "italic" }}>No current Add, Trade Board pickup, or Trade would clear the floor for this swap yet.</div>
+                            )}
+                          </div>
+                        );
+                      })()}
                       <button className="action small" style={{ marginTop: 8 }} onClick={() => toggleShowAdds(rowKey)}>
                         {addsShown ? "Hide" : "Show"} possible adds ({unlockedAdds.length})
                       </button>
@@ -2981,11 +3046,27 @@ export default function DayOffPayPlanner({ session }) {
                           Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · includes a wanted day" : ""}
                         </div>
                       </div>
-                      {wouldViolateFloor && (
-                        <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 8 }}>
-                          Can't plan this swap — it would take your worked total to {floorProjection.toFixed(2)}h, under the 60h floor.
-                        </div>
-                      )}
+                      {wouldViolateFloor && (() => {
+                        const shortfall = 60 - floorProjection;
+                        const floorFixes = getFloorFixSuggestions(shortfall, [p.a.key, p.b.key]);
+                        return (
+                          <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 8 }}>
+                            Can't plan this swap — it would take your worked total to {floorProjection.toFixed(2)}h, under the 60h floor.
+                            {floorFixes.length > 0 ? (
+                              <div style={{ marginTop: 4 }}>
+                                Ways to clear the floor first:
+                                <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                                  {floorFixes.map((fx, i) => (
+                                    <li key={i}>{fx.label} — brings you to {(floorProjection + fx.credit).toFixed(2)}h</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ) : (
+                              <div style={{ marginTop: 4, fontStyle: "italic" }}>No current Add, Trade Board pickup, or Trade would clear the floor for this swap yet.</div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   );
                 })}
