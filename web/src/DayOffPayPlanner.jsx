@@ -11,7 +11,19 @@ function dateKey(y, m, d) { return `${y}-${pad2(m + 1)}-${pad2(d)}`; }
 
 function parseCreditToHours(raw) {
   if (!raw) return null;
-  const digits = String(raw).replace(/[^\d]/g, "");
+  const trimmed = String(raw).trim();
+  if (trimmed.includes(":")) {
+    // "16:36", "6:36", or "16:6"/"6:6" with the leading zero on minutes left off -- split on
+    // the colon itself rather than stripping it, since a compact hhmm reading can't tell "16:6"
+    // (16h06m) apart from "166" (which the digit-only path below would misread as 1h66m).
+    const parts = trimmed.split(":");
+    if (parts.length !== 2) return null;
+    const h = parseInt(parts[0].replace(/[^\d]/g, ""), 10);
+    const m = parseInt(parts[1].replace(/[^\d]/g, ""), 10);
+    if (isNaN(h) || isNaN(m)) return null;
+    return h + m / 60;
+  }
+  const digits = trimmed.replace(/[^\d]/g, "");
   if (!digits) return null;
   const p = digits.padStart(4, "0");
   const h = parseInt(p.slice(0, -2), 10);
@@ -2358,6 +2370,12 @@ export default function DayOffPayPlanner({ session }) {
           </div>
         )}
 
+        {scheduleParsed && droppableTrips.length > 0 && (
+          <div style={{ fontSize: 12, color: "var(--amber-strong)", background: "var(--badge-amber-bg)", border: "1px solid var(--border-amber-soft)", borderRadius: 6, padding: "8px 12px", marginBottom: 16 }}>
+            FLICA's schedule export only gives a total month credit, never per-trip credit — enter each trip's individual credit hours yourself in "Your trips" below, in <strong>hhmm</strong> format (e.g. type <strong>1636</strong> for 16 hours 36 minutes). Without it, this tool can't auto-adjust your baseline after a swap, and can't warn you before a swap would drop you under the 60-hour floor.
+          </div>
+        )}
+
         {droppableTrips.length > 0 && (
           <div style={{ marginBottom: 24 }}>
             <div className="h">Your trips — flag and check droppability</div>
@@ -2395,7 +2413,7 @@ export default function DayOffPayPlanner({ session }) {
                 ))}
               </tbody>
             </table>
-            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering). Without it, a swap leaves baseline untouched and you'll need to adjust it by hand. Premium trips are flagged so swap and trade-board suggestions don't casually give away extra-value trips.</div>
+            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium trips are flagged so swap and trade-board suggestions don't casually give away extra-value trips.</div>
           </div>
         )}
 
