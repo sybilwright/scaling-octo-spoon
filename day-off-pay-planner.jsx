@@ -2036,12 +2036,18 @@ export default function DayOffPayPlanner() {
     if (shortfall == null || shortfall <= 0) return [];
     const suggestions = [];
     const addFix = bestFloorFit(eligibleSorted, shortfall, (t) => t.creditHours);
-    if (addFix) suggestions.push({ label: `Accept the Add ${addFix.pairing} (${formatHours(addFix.creditHours)}) from the Opentime pot`, credit: addFix.creditHours });
+    if (addFix) suggestions.push({ kind: "add", label: `Accept the Add ${addFix.pairing} (${formatHours(addFix.creditHours)}) from the Opentime pot`, credit: addFix.creditHours });
     const tbFix = bestFloorFit(floorFixTradeBoardCandidates, shortfall, (t) => t.creditHours);
-    if (tbFix) suggestions.push({ label: `Accept the Trade Board pickup ${tbFix.pairing} (${formatHours(tbFix.creditHours)})`, credit: tbFix.creditHours });
+    if (tbFix) suggestions.push({ kind: "tbadd", label: `Accept the Trade Board pickup ${tbFix.pairing} (${formatHours(tbFix.creditHours)})`, credit: tbFix.creditHours });
+    // A "Trade Board" listing is almost never actually a swap-for-swap request -- most posters
+    // just want the trip gone entirely (a straight drop, which is really a plain non-SDO Add for
+    // whoever picks it up). This tool has no way to tell which one a given listing is from the
+    // pairing/credit data alone, so this suggestion is only ever a starting point, never a
+    // confirmed match -- the render side attaches an explicit warning to check FLICA directly.
     const bilateralFix = floorFixBilateralCandidates.find((p) => p.delta >= shortfall && !excludeKeys.includes(p.outgoing.key));
     if (bilateralFix) {
       suggestions.push({
+        kind: "trade",
         label: `Trade away ${bilateralFix.outgoing.pairing} (${formatHours(bilateralFix.outCredit)}) for ${bilateralFix.incoming.pairing} (${formatHours(bilateralFix.incoming.creditHours)}) — net +${formatHours(bilateralFix.delta)}`,
         credit: bilateralFix.delta,
       });
@@ -2906,6 +2912,11 @@ export default function DayOffPayPlanner() {
                                     <li key={i}>{fx.label} — brings you to {(floorProjection + fx.credit).toFixed(2)}h</li>
                                   ))}
                                 </ul>
+                                {floorFixes.some((fx) => fx.kind === "trade") && (
+                                  <div style={{ marginTop: 4, fontStyle: "italic" }}>
+                                    Trade Board listings are usually a straight drop, not a swap-for-swap request — check what this specific posting actually says on FLICA before counting on it. If they just want it gone, it's really a normal (non-SDO) pickup, not a trade. If they do want something specific back, that's between you and them to work out on FLICA — this tool can't confirm what they'll accept.
+                                  </div>
+                                )}
                               </div>
                             ) : (
                               <div style={{ marginTop: 4, fontStyle: "italic" }}>No current Add, Trade Board pickup, or Trade would clear the floor for this swap yet.</div>
@@ -2998,6 +3009,11 @@ export default function DayOffPayPlanner() {
                                     <li key={i}>{fx.label} — brings you to {(floorProjection + fx.credit).toFixed(2)}h</li>
                                   ))}
                                 </ul>
+                                {floorFixes.some((fx) => fx.kind === "trade") && (
+                                  <div style={{ marginTop: 4, fontStyle: "italic" }}>
+                                    Trade Board listings are usually a straight drop, not a swap-for-swap request — check what this specific posting actually says on FLICA before counting on it. If they just want it gone, it's really a normal (non-SDO) pickup, not a trade. If they do want something specific back, that's between you and them to work out on FLICA — this tool can't confirm what they'll accept.
+                                  </div>
+                                )}
                               </div>
                             ) : (
                               <div style={{ marginTop: 4, fontStyle: "italic" }}>No current Add, Trade Board pickup, or Trade would clear the floor for this swap yet.</div>
