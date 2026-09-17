@@ -1775,7 +1775,18 @@ function DayOffPayPlanner() {
     setScheduleParsed(result);
     if (result.daysOff.size) addDaysOff(Array.from(result.daysOff));
     if (result.summary.credit != null) setBaselineCredit(String(result.summary.credit));
-    setSdoFlags(/* @__PURE__ */ new Set());
+    const plannedAddIdentities = new Set(
+      enrichedOpen.filter((t) => selected.has(t.id) && t.start).map((t) => tripKey({ pairing: t.pairing, startYear: t.start.year, startMonth: t.start.month, startDay: t.start.day }))
+    );
+    setSdoFlags((prev) => {
+      const next = new Set([...prev].filter(
+        (key) => injectedTrips.some((it) => tripKey(it) === key) || result.trips.some((t) => tripKey(t) === key)
+      ));
+      result.trips.forEach((t) => {
+        if (plannedAddIdentities.has(tripKey(t))) next.add(tripKey(t));
+      });
+      return next;
+    });
     setPremiumFlags(/* @__PURE__ */ new Set());
   }
   function handleParseSchedule() {

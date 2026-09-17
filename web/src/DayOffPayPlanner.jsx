@@ -1573,7 +1573,25 @@ export default function DayOffPayPlanner({ session }) {
     setScheduleParsed(result);
     if (result.daysOff.size) addDaysOff(Array.from(result.daysOff));
     if (result.summary.credit != null) setBaselineCredit(String(result.summary.credit));
-    setSdoFlags(new Set());
+    // A schedule trip whose pairing+date exactly matches an Open Time Add you'd already marked
+    // "Planned" is one you clearly meant to pick up for SDO -- if it's now showing up for real
+    // (picked up in FLICA, then this updated schedule re-pasted), flag it automatically instead
+    // of leaving it to be found and re-checked by hand in "Your trips". This also carries
+    // forward any flag whose trip is still actually live (still in this new parse, or already
+    // committed via injectedTrips) -- re-parsing the schedule shouldn't silently forget an SDO
+    // trip that was already flagged or accepted before this re-paste.
+    const plannedAddIdentities = new Set(
+      enrichedOpen
+        .filter((t) => selected.has(t.id) && t.start)
+        .map((t) => tripKey({ pairing: t.pairing, startYear: t.start.year, startMonth: t.start.month, startDay: t.start.day }))
+    );
+    setSdoFlags((prev) => {
+      const next = new Set([...prev].filter((key) =>
+        injectedTrips.some((it) => tripKey(it) === key) || result.trips.some((t) => tripKey(t) === key)
+      ));
+      result.trips.forEach((t) => { if (plannedAddIdentities.has(tripKey(t))) next.add(tripKey(t)); });
+      return next;
+    });
     setPremiumFlags(new Set());
   }
   function handleParseSchedule() { applyScheduleText(scheduleText); }
