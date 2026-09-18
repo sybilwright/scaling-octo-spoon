@@ -751,6 +751,13 @@ export default function DayOffPayPlanner() {
     const n = parseInt(minRestDaysPref, 10);
     return (!isNaN(n) && n >= 1) ? n : 0;
   }, [minRestDaysPref]);
+  // Separate from the gap preference above -- this is a floor on the TOTAL count of days off
+  // left in the whole bid month, not a per-pickup spacing rule. Optional, default disabled.
+  const [minDaysOffPref, setMinDaysOffPref] = useState("");
+  const effectiveMinDaysOff = useMemo(() => {
+    const n = parseInt(minDaysOffPref, 10);
+    return (!isNaN(n) && n >= 1) ? n : 0;
+  }, [minDaysOffPref]);
   function toggleWantedWeekday(dow) {
     setWantedWeekdays((prev) => { const n = new Set(prev); n.has(dow) ? n.delete(dow) : n.add(dow); return n; });
   }
@@ -1484,7 +1491,7 @@ export default function DayOffPayPlanner() {
       tradeDetails: [...tradeDetails.entries()],
       sdoTripCredits: [...sdoTripCredits.entries()],
       sickSectionOpen, sickBankStart, sickEntries,
-      notesOpen, notesText, plannerOpen, dayPlans, maxConsecutiveDaysPref, minRestDaysPref,
+      notesOpen, notesText, plannerOpen, dayPlans, maxConsecutiveDaysPref, minRestDaysPref, minDaysOffPref,
       tradeSectionOpen, allowSdoTrade, openPotViewerOpen,
       addsReadySectionOpen, addsNearMissSectionOpen, swapsSectionOpen, tbPostSectionOpen, tbAddSectionOpen,
       calVisible, theme,
@@ -1559,6 +1566,7 @@ export default function DayOffPayPlanner() {
       if (d.dayPlans) setDayPlans(d.dayPlans);
       if (d.maxConsecutiveDaysPref != null) setMaxConsecutiveDaysPref(d.maxConsecutiveDaysPref);
       if (d.minRestDaysPref != null) setMinRestDaysPref(d.minRestDaysPref);
+      if (d.minDaysOffPref != null) setMinDaysOffPref(d.minDaysOffPref);
       if (d.tradeSectionOpen != null) setTradeSectionOpen(d.tradeSectionOpen);
       if (d.openPotViewerOpen != null) setOpenPotViewerOpen(d.openPotViewerOpen);
       if (d.addsReadySectionOpen != null) setAddsReadySectionOpen(d.addsReadySectionOpen);
@@ -1880,6 +1888,18 @@ export default function DayOffPayPlanner() {
     return false;
   }
 
+  // Would picking up this candidate's days drop the bid month's remaining days off below the
+  // configured floor (effectiveMinDaysOff)? Checked against the current actual daysOff count for
+  // the month, same style as exceedsMaxStreak/violatesMinRest -- not simulated against any other
+  // still-pending pick, only against what's really on the schedule right now.
+  function violatesMinDaysOffFloor(dateKeys) {
+    if (!effectiveMinDaysOff || !dateKeys.length) return false;
+    const monthPrefix = `${year}-${pad2(month + 1)}`;
+    const currentOffThisMonth = [...daysOff].filter((k) => k.startsWith(monthPrefix)).length;
+    const consumedThisMonth = dateKeys.filter((k) => k.startsWith(monthPrefix)).length;
+    return currentOffThisMonth - consumedThisMonth < effectiveMinDaysOff;
+  }
+
   // violatesRestRule only catches conflicts against what's already live (dutyReportByDate/
   // dutyArriveByDate come from liveTrips) -- it has no way to see a conflict against some OTHER
   // still-pending suggestion, since that trip isn't on the schedule yet either. A "possible add"
@@ -1960,15 +1980,17 @@ export default function DayOffPayPlanner() {
       const exceedsMaxStreak = keys.length > 0 && longestConsecutiveRun(simulatedWorking) > effectiveMaxConsecutive;
       const violatesRest = violatesRestRule(keys, t.report, t.arrive);
       const violatesMinRest = keys.length > 0 && violatesMinRestGap(occupiedDateKeys, keys, effectiveMinRestDays);
-      return { ...t, dateKeys: keys, overlap, eligible, missing, pay, perDay, fitsTime: passesTimePref(t), usesWanted: keys.some((k) => wantedOff.has(k)), exceedsMaxStreak, violatesRest, violatesMinRest, onVacation };
+      const violatesMinDaysOff = violatesMinDaysOffFloor(keys);
+      return { ...t, dateKeys: keys, overlap, eligible, missing, pay, perDay, fitsTime: passesTimePref(t), usesWanted: keys.some((k) => wantedOff.has(k)), exceedsMaxStreak, violatesRest, violatesMinRest, violatesMinDaysOff, onVacation };
     });
-  }, [allOpenTrips, daysOff, hourlyRate, wantedOff, applyTimePref, minReport, maxArrive, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays]);
+  }, [allOpenTrips, daysOff, hourlyRate, wantedOff, applyTimePref, minReport, maxArrive, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
 
-  const eligibleSorted = useMemo(() => enrichedOpen.filter((t) => t.eligible && t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !deniedAddIds.has(t.id)).slice().sort((a, b) => (b.perDay || 0) - (a.perDay || 0)), [enrichedOpen, deniedAddIds]);
-  const nearMiss = useMemo(() => enrichedOpen.filter((t) => !t.eligible && !t.autoTB && t.start && t.overlap > 0 && t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !deniedAddIds.has(t.id)).slice().sort((a, b) => a.missing.length - b.missing.length), [enrichedOpen, deniedAddIds]);
+  const eligibleSorted = useMemo(() => enrichedOpen.filter((t) => t.eligible && t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !deniedAddIds.has(t.id)).slice().sort((a, b) => (b.perDay || 0) - (a.perDay || 0)), [enrichedOpen, deniedAddIds]);
+  const nearMiss = useMemo(() => enrichedOpen.filter((t) => !t.eligible && !t.autoTB && t.start && t.overlap > 0 && t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !deniedAddIds.has(t.id)).slice().sort((a, b) => a.missing.length - b.missing.length), [enrichedOpen, deniedAddIds]);
   const maxStreakBlockedCount = enrichedOpen.filter((t) => t.eligible && t.exceedsMaxStreak).length;
   const restBlockedCount = enrichedOpen.filter((t) => t.eligible && !t.exceedsMaxStreak && t.violatesRest).length;
   const minRestBlockedCount = enrichedOpen.filter((t) => t.eligible && !t.exceedsMaxStreak && !t.violatesRest && t.violatesMinRest).length;
+  const minDaysOffBlockedCount = enrichedOpen.filter((t) => t.eligible && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && t.violatesMinDaysOff).length;
   const autoFlaggedTB = enrichedOpen.filter((t) => t.autoTB);
 
   const enrichedTrade = useMemo(() => {
@@ -1978,12 +2000,13 @@ export default function DayOffPayPlanner() {
       const exceedsMaxStreak = keys.length > 0 && longestConsecutiveRun(new Set([...occupiedDateKeys, ...keys])) > effectiveMaxConsecutive;
       const violatesRest = violatesRestRule(keys, t.report, t.arrive);
       const violatesMinRest = keys.length > 0 && violatesMinRestGap(occupiedDateKeys, keys, effectiveMinRestDays);
+      const violatesMinDaysOff = violatesMinDaysOffFloor(keys);
       const onVacation = overlapsVacation(keys);
-      const feasible = keys.length > 0 && overlap === keys.length && !exceedsMaxStreak && !violatesRest && !violatesMinRest && !onVacation;
+      const feasible = keys.length > 0 && overlap === keys.length && !exceedsMaxStreak && !violatesRest && !violatesMinRest && !violatesMinDaysOff && !onVacation;
       const missing = keys.filter((k) => !daysOff.has(k));
-      return { ...t, dateKeys: keys, overlap, feasible, missing, fitsTime: passesTimePref(t), exceedsMaxStreak, violatesRest, violatesMinRest, onVacation };
-    }).filter((t) => t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.onVacation);
-  }, [tradeParsed, daysOff, applyTimePref, minReport, maxArrive, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays]);
+      return { ...t, dateKeys: keys, overlap, feasible, missing, fitsTime: passesTimePref(t), exceedsMaxStreak, violatesRest, violatesMinRest, violatesMinDaysOff, onVacation };
+    }).filter((t) => t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !t.onVacation);
+  }, [tradeParsed, daysOff, applyTimePref, minReport, maxArrive, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
 
   const usedDateKeys = useMemo(() => {
     const s = new Set();
@@ -2615,6 +2638,23 @@ export default function DayOffPayPlanner() {
           <div className="hint" style={{ marginTop: 6, marginBottom: 0 }}>
             If set, no Add, Swap, or Trade Board recommendation will be offered if it would leave less than this many consecutive days off between it and your nearest other working day. For example, with 2 set and you working the 13th, nothing on the 14th or 15th will be recommended — but this is checked fresh against your actual current schedule every time, not fixed to those specific dates, so it updates automatically as your schedule changes.
             {minRestBlockedCount > 0 && ` ${minRestBlockedCount} otherwise-eligible Add${minRestBlockedCount === 1 ? " is" : "s are"} currently hidden by this.`}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Minimum days off left in the month (optional)</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input
+              type="text" value={minDaysOffPref} style={{ width: 50 }} placeholder="off"
+              onChange={(e) => setMinDaysOffPref(e.target.value.replace(/[^\d]/g, ""))}
+            />
+            <span style={{ fontSize: 12, color: "var(--text-faint)" }}>
+              {effectiveMinDaysOff > 0 ? `days — currently enforcing a ${effectiveMinDaysOff}-day floor` : "days — leave blank to disable"}
+            </span>
+          </div>
+          <div className="hint" style={{ marginTop: 6, marginBottom: 0 }}>
+            Different from the gap rule above — this is a floor on the total count of days off left in the whole bid month, not spacing between pickups. If set, no Add or Trade Board recommendation will be offered if taking it would drop your remaining days off this month below this number. Checked fresh against your actual current days off every time, not a one-time snapshot. Doesn't apply to Swaps, since a Swap itself is what manufactures days off rather than spending them.
+            {minDaysOffBlockedCount > 0 && ` ${minDaysOffBlockedCount} otherwise-eligible Add${minDaysOffBlockedCount === 1 ? " is" : "s are"} currently hidden by this.`}
           </div>
         </div>
 
