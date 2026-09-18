@@ -469,6 +469,31 @@ function formatSignedHours(h) {
   if (h == null || isNaN(h)) return "—";
   return `${h < 0 ? "-" : h > 0 ? "+" : ""}${formatHours(Math.abs(h))}`;
 }
+// Walks forward from `startDay` collecting up to `count` days that are currently scheduled
+// WORKING days (present in occupiedDateKeys), skipping over any day that's already off -- real
+// bereavement leave only ever spends days that were actually going to be worked, so a gap between
+// two trips (already a day off) doesn't consume part of the 3- or 5-day allowance, it's just
+// skipped over. Capped at a generous lookahead so a start day near the end of the schedule can't
+// spin forever looking for working days that were never going to appear.
+function walkWorkingDayKeys(startDay, count, year, month, occupiedDateKeys) {
+  const keys = [];
+  if (!count || count < 1) return keys;
+  const d = new Date(year, month, startDay);
+  for (let guard = 0; keys.length < count && guard < 60; guard++) {
+    const k = dateKey(d.getFullYear(), d.getMonth(), d.getDate());
+    if (occupiedDateKeys.has(k)) keys.push(k);
+    d.setDate(d.getDate() + 1);
+  }
+  return keys;
+}
+// The actual calendar day(s) a leave entry protects -- Sick/USIC/MED is always just its own single
+// day; BER resolves to whichever working days walkWorkingDayKeys finds starting from e.day, which
+// may span more calendar days than e.berDays once already-off gaps are skipped.
+function sickEntryDateKeys(e, year, month, occupiedDateKeys) {
+  if (!e.day) return [];
+  if (e.type === "BER") return walkWorkingDayKeys(e.day, e.berDays, year, month, occupiedDateKeys);
+  return [dateKey(year, month, e.day)];
+}
 
 function parseSchedule(text, year, month) {
   const rawLines = normalizeScheduleExport(text).split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
@@ -1847,10 +1872,35 @@ export default function DayOffPayPlanner({ session }) {
     return s;
   }, [liveTrips]);
 
+  // Sick/short-term medical/bereavement entries (tracker below) protect the specific calendar
+  // days they actually spend -- for BER that's a walk of currently-working days from the chosen
+  // start, skipping already-off gaps (see walkWorkingDayKeys), never the raw calendar span.
+  // Folded into vacationDateKeys just below so every existing Add/swap-in eligibility check that
+  // already excludes VAC/PED days excludes these the same way, with no separate wiring needed.
+  const sickProtectedDateKeys = useMemo(() => {
+    const s = new Set();
+    sickEntries.forEach((e) => { sickEntryDateKeys(e, year, month, occupiedDateKeys).forEach((k) => s.add(k)); });
+    return s;
+  }, [sickEntries, year, month, occupiedDateKeys]);
+  // Same days, paired with the actual leave code so the Updated/Planned calendars below label
+  // them "SIC"/"USIC"/"MED"/"BER" instead of falling back to the calendar renderer's generic
+  // "VAC" placeholder for any protected day with no code on record.
+  const sickProtectedDayCodes = useMemo(() => {
+    const m = new Map();
+    sickEntries.forEach((e) => { sickEntryDateKeys(e, year, month, occupiedDateKeys).forEach((k) => { if (!m.has(k)) m.set(k, e.type); }); });
+    return m;
+  }, [sickEntries, year, month, occupiedDateKeys]);
+
   // VAC/VAX days count as days off but can never be worked over — excluded from every
   // Add/swap-in eligibility check separately from the ordinary days-off availability check.
-  const vacationDateKeys = useMemo(() => (scheduleParsed ? scheduleParsed.vacationDays : new Set()), [scheduleParsed]);
-  const protectedDayCodes = useMemo(() => (scheduleParsed && scheduleParsed.protectedDayCodes ? scheduleParsed.protectedDayCodes : new Map()), [scheduleParsed]);
+  const vacationDateKeys = useMemo(() => {
+    const base = scheduleParsed ? scheduleParsed.vacationDays : new Set();
+    return sickProtectedDateKeys.size ? new Set([...base, ...sickProtectedDateKeys]) : base;
+  }, [scheduleParsed, sickProtectedDateKeys]);
+  const protectedDayCodes = useMemo(() => {
+    const base = scheduleParsed && scheduleParsed.protectedDayCodes ? scheduleParsed.protectedDayCodes : new Map();
+    return sickProtectedDayCodes.size ? new Map([...base, ...sickProtectedDayCodes]) : base;
+  }, [scheduleParsed, sickProtectedDayCodes]);
   function overlapsVacation(dateKeys) { return dateKeys.some((k) => vacationDateKeys.has(k)); }
 
   // Only injected (Open Time/Trade Board sourced) trips carry known clock times — the original
@@ -1940,7 +1990,7 @@ export default function DayOffPayPlanner({ session }) {
 
   const updatedCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
-    const offCountThisMonth = [...daysOff].filter((k) => k.startsWith(`${year}-${pad2(month + 1)}`)).length;
+    const offCountThisMonth = [...new Set([...daysOff, ...sickProtectedDateKeys])].filter((k) => k.startsWith(`${year}-${pad2(month + 1)}`)).length;
     return renderFlicaCalendar(liveTrips, offCountThisMonth, year, month, baselineCredit, scheduleParsed.summary.block, true, vacationDateKeys, protectedDayCodes);
   }, [scheduleParsed, liveTrips, daysOff, year, month, baselineCredit, vacationDateKeys, protectedDayCodes]);
 
@@ -2404,7 +2454,7 @@ export default function DayOffPayPlanner({ session }) {
   }, [liveTrips, projection, combinedSwapRowsByKey, enrichedOpen]);
 
   const plannedDaysOffSet = useMemo(() => {
-    const s = new Set(daysOff);
+    const s = new Set([...daysOff, ...sickProtectedDateKeys]);
     projection.resolved.filter((e) => e.included).forEach((entry) => {
       if (entry.type === "swap") {
         const row = combinedSwapRowsByKey.get(entry.id);
@@ -2419,7 +2469,7 @@ export default function DayOffPayPlanner({ session }) {
       }
     });
     return s;
-  }, [daysOff, projection, combinedSwapRowsByKey, enrichedOpen]);
+  }, [daysOff, sickProtectedDateKeys, projection, combinedSwapRowsByKey, enrichedOpen]);
 
   const plannedCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
@@ -2734,7 +2784,7 @@ export default function DayOffPayPlanner({ session }) {
           {sickSectionOpen && (
             <>
               <div className="hint" style={{ marginTop: 6 }}>
-                These days aren't part of your FLICA schedule import — track a day you called out sick (SIC/USIC), a short-term medical leave day (MED), or bereavement (BER) here as the month goes on. Coverage for sick and medical days depends entirely on your Sick Bank balance — check "Sick Start" for the month in ELP and enter it below, then verify for yourself whether each day is actually covered before marking it that way. This tool only totals up what you tell it; it never checks ELP for you.
+                These days aren't part of your FLICA schedule import — track a day you called out sick (SIC/USIC), a short-term medical leave day (MED), or bereavement (BER) here as the month goes on. Coverage for sick and medical days depends entirely on your Sick Bank balance — check "Sick Start" for the month in ELP and enter it below, then verify for yourself whether each day is actually covered before marking it that way. This tool only totals up what you tell it; it never checks ELP for you. Every day entered here is a protected day off, same as VAC or PED — no Add or swap-in recommendation below can ever land on it.
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", margin: "10px 0" }}>
                 <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Sick Start (from ELP)</label>
@@ -2804,7 +2854,7 @@ export default function DayOffPayPlanner({ session }) {
                 <button className="action" onClick={addSickEntry}>Add</button>
               </div>
               {sickDraftType === "BER" && (
-                <div className="hint" style={{ marginTop: 4 }}>The first 3 consecutive days of BER are always credited at {BEREAVEMENT_CREDIT_HOURS}h/day, no sick bank needed. An optional 2 more consecutive days pay {BEREAVEMENT_CREDIT_HOURS}h/day only if covered by the sick bank — if not covered, those extra days are simply unpaid, never subtracted from your monthly credit.</div>
+                <div className="hint" style={{ marginTop: 4 }}>The first 3 consecutive days of BER are always credited at {BEREAVEMENT_CREDIT_HOURS}h/day, no sick bank needed. An optional 2 more consecutive days pay {BEREAVEMENT_CREDIT_HOURS}h/day only if covered by the sick bank — if not covered, those extra days are simply unpaid, never subtracted from your monthly credit. "Consecutive" means consecutive scheduled working days, not consecutive calendar days — a day already off in between (like a gap between two trips) is skipped over for free and doesn't use up any of the {parseInt(sickDraftBerDays, 10) || 3}. E.g. working the 1st–4th then the 6th–8th, starting bereavement on the 3rd: the first 3 days land on the 3rd, 4th, and 6th (the 5th is already off, so it's skipped), and the 2 extra days would land on the 7th and 8th.</div>
               )}
 
               {sickEntries.length > 0 && (
@@ -2813,10 +2863,11 @@ export default function DayOffPayPlanner({ session }) {
                   <tbody>
                     {sickEntries.map((e) => {
                       const delta = sickEntryCreditDelta(e);
+                      const resolvedDays = e.type === "BER" ? sickEntryDateKeys(e, year, month, occupiedDateKeys).map((k) => parseInt(k.slice(-2), 10)) : null;
                       return (
                         <tr key={e.id}>
                           <td style={{ color: "var(--text-primary)" }}>{e.type}</td>
-                          <td>Day {e.day}{e.type === "BER" && e.berDays > 1 ? ` +${e.berDays - 1}d` : ""}</td>
+                          <td>{e.type === "BER" ? `Days ${resolvedDays.join(", ")}${resolvedDays.length < e.berDays ? " (not enough working days ahead to fill the rest)" : ""}` : `Day ${e.day}`}</td>
                           <td>{e.type === "BER" ? `${BEREAVEMENT_CREDIT_HOURS}h/day` : formatHours(parseCreditToHours(e.hoursRaw))}</td>
                           <td style={{ fontSize: 12 }}>
                             {e.type === "BER"
