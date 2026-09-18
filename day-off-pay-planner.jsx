@@ -2724,6 +2724,9 @@ export default function DayOffPayPlanner() {
               <div className="hint" style={{ marginTop: 6 }}>
                 These days aren't part of your FLICA schedule import — track a day you called out sick (SIC/USIC), a short-term medical leave day (MED), or bereavement (BER) here as the month goes on. Coverage for sick and medical days depends entirely on your Sick Bank balance — check "Sick Start" for the month in ELP and enter it below, then verify for yourself whether each day is actually covered before marking it that way. This tool only totals up what you tell it; it never checks ELP for you. Every day entered here is a protected day off, same as VAC or PED — no Add or swap-in recommendation below can ever land on it.
               </div>
+              <div className="hint" style={{ marginTop: 4, color: "var(--amber-strong)" }}>
+                One limit worth knowing: entering a day here doesn't remove the original trip still sitting on your schedule that day, so it still counts as a working day for the 6-consecutive-days check elsewhere in the tool — that only clears up once you re-paste an updated FLICA schedule that actually reflects the change (which this tool will pick back up automatically).
+              </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", margin: "10px 0" }}>
                 <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Sick Start (from ELP)</label>
                 <input type="text" value={sickBankStart} onChange={(e) => setSickBankStart(e.target.value)} placeholder="e.g. 2400 for 24h00m" style={{ width: 120 }} />
