@@ -117,9 +117,16 @@ function findCol(headers, keywords) {
 }
 
 function normalizeTime(raw) {
-  const m = String(raw || "").trim().match(/^(\d{1,2}):(\d{2})/);
+  const s = String(raw || "").trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})\s*([AaPp])?\.?[Mm]?\.?/);
   if (!m) return null;
-  return `${pad2(parseInt(m[1], 10))}:${m[2]}`;
+  let h = parseInt(m[1], 10);
+  const min = m[2];
+  const ap = m[3] ? m[3].toLowerCase() : null;
+  if (ap === "p" && h < 12) h += 12;
+  else if (ap === "a" && h === 12) h = 0;
+  if (h > 23 || h < 0) return null;
+  return `${pad2(h)}:${min}`;
 }
 
 // ---- Proper CSV parser (handles quoted fields with embedded commas/newlines) ----
