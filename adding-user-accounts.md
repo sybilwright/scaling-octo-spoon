@@ -55,6 +55,8 @@ await supabase.auth.signOut();
 supabase.auth.onAuthStateChange((event, session) => { /* update logged-in state */ });
 ```
 
+**"Logged in" isn't just "a session exists"** — this was a real bug once. Supabase can hand back a session for an account whose email confirmation never actually went through (the confirmation send itself failing silently is the common case), and `Auth.jsx` already tells the user "check your email to confirm your account" at signup, so the app has to actually honor that promise rather than letting a session alone through. `App.jsx` gates on `session.user.email_confirmed_at` explicitly, between the "not logged in" check and everything else (including the access/subscription gate in section 7) — null/unset shows a "confirm your email" screen with a resend button (`supabase.auth.resend({ type: "signup", email })`) and a way to log out, not the planner. This never blocks a project with email confirmations disabled at the Supabase level: Supabase auto-sets `email_confirmed_at` at signup in that case, so the check passes immediately either way.
+
 ## 4. What changes inside the existing component
 
 This is the part that matters most for keeping the rest of the app untouched. Three functions currently talk to `window.storage` — swap only these:

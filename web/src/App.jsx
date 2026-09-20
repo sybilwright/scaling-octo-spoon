@@ -20,6 +20,23 @@ export default function App() {
   const [profile, setProfile] = useState(undefined);
   const [checkoutStatus, setCheckoutStatus] = useState("");
   const [showAdminStats, setShowAdminStats] = useState(false);
+  const [resendStatus, setResendStatus] = useState("");
+  const [resendBusy, setResendBusy] = useState(false);
+
+  async function handleResendConfirmation() {
+    if (!session?.user?.email) return;
+    setResendBusy(true);
+    setResendStatus("");
+    try {
+      const { error } = await supabase.auth.resend({ type: "signup", email: session.user.email });
+      if (error) throw error;
+      setResendStatus("Sent — check your email (and spam folder) for a new confirmation link.");
+    } catch (err) {
+      setResendStatus(err.message || "Couldn't resend the confirmation email — try again in a minute.");
+    } finally {
+      setResendBusy(false);
+    }
+  }
 
   async function handleSubscribe() {
     setCheckoutStatus("Starting checkout…");
@@ -81,6 +98,51 @@ export default function App() {
   if (session === undefined) return null; // still checking for an existing session
 
   if (!session) return <Auth />;
+
+  // Supabase can hand back a real session for an account whose email was never actually
+  // confirmed -- e.g. the confirmation send itself silently failed, or email confirmation is
+  // off at the project level but this code still promises "check your email" at signup. Gate
+  // on it explicitly here instead of trusting that a session alone means the account is real:
+  // email_confirmed_at is set the moment Supabase actually confirms the address (immediately,
+  // if the project has confirmations disabled -- so this never blocks that case), and stays
+  // null until then otherwise.
+  if (!session.user.email_confirmed_at) {
+    return (
+      <div style={{ maxWidth: 420, margin: "80px auto", fontFamily: "sans-serif", textAlign: "center" }}>
+        <h1 style={{ fontSize: 20, marginBottom: 12 }}>Confirm your email</h1>
+        <p style={{ fontSize: 14, color: "#555", marginBottom: 20 }}>
+          We sent a confirmation link to <strong>{session.user.email}</strong>. Click it, then come back and log in again. If the email never arrived, you can send a new one below.
+        </p>
+        <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <button
+            type="button"
+            onClick={handleResendConfirmation}
+            disabled={resendBusy}
+            style={{
+              padding: "8px 16px",
+              fontSize: 13,
+              cursor: "pointer",
+              background: "#111",
+              color: "#fff",
+              border: "none",
+              borderRadius: 4,
+              fontWeight: 500,
+            }}
+          >
+            {resendBusy ? "Sending…" : "Resend confirmation email"}
+          </button>
+          <button
+            type="button"
+            onClick={() => supabase.auth.signOut()}
+            style={{ padding: "8px 16px", fontSize: 13, cursor: "pointer" }}
+          >
+            Log out
+          </button>
+        </div>
+        {resendStatus && <p style={{ marginTop: 14, fontSize: 12, color: "#555" }}>{resendStatus}</p>}
+      </div>
+    );
+  }
 
   if (profile === undefined) return null; // still loading the profile row
 
