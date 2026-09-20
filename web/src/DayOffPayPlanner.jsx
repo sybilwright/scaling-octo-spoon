@@ -38,6 +38,12 @@ function formatHours(h) {
   const mm = Math.round((h - hh) * 60);
   return `${hh}:${pad2(mm)}`;
 }
+// formatHours alone mis-renders a negative fractional value (Math.floor(-6.5) = -7, so it prints
+// "-7:30" instead of "-6:30") -- pull the sign off first, format the magnitude, then reattach.
+function formatSignedHours(h) {
+  if (h == null || isNaN(h)) return "—";
+  return `${h < 0 ? "-" : h > 0 ? "+" : ""}${formatHours(Math.abs(h))}`;
+}
 
 function formatMoney(n) {
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -419,12 +425,60 @@ function normalizeScheduleExport(text) {
 
 const VACATION_CREDIT_HOURS = 3;
 const PED_CREDIT_HOURS = 3.5; // PED = Personal Emergency Day (paid)
+const BEREAVEMENT_CREDIT_HOURS = 3.5;
 // Every one of these is a protected day off -- never a valid pickup target, can never be worked
 // over -- but they don't all carry the same credit. VAC/VAX and PED are each credited at their
-// own flat rate; SICK/SIC/SNG/USIC/ING/PUD carry no credit at all. "ING" and "SICK" are the same
-// thing under two different names FLICA uses depending on export/paste source, and so is PUD --
-// Personal Emergency Day Unpaid, i.e. the unpaid counterpart to PED, coded the same as SICK.
-const PROTECTED_DAY_CREDIT = { VAC: VACATION_CREDIT_HOURS, VAX: VACATION_CREDIT_HOURS, PED: PED_CREDIT_HOURS, SICK: 0, SIC: 0, SNG: 0, USIC: 0, ING: 0, PUD: 0 };
+// own flat rate; SICK/SIC/SNG/USIC/ING/PUD/MED carry no credit here at all -- not because they're
+// unpaid, but because whether the sick bank actually covers them is unknowable from the schedule
+// paste alone (see the sick-bank caveat note shown wherever SIC/USIC/MED appear). "ING" and
+// "SICK" are the same thing under two different names FLICA uses depending on export/paste
+// source, and so is PUD -- Personal Emergency Day Unpaid, i.e. the unpaid counterpart to PED,
+// coded the same as SICK. BER is also 0 here for the same "can't tell from a flat map" reason --
+// its real credit (flat for the first 3 days of a run, sick-bank-dispersed for any more) is
+// computed separately by berGuaranteedCredit/berExtraDaySlots below, never read from this map.
+const PROTECTED_DAY_CREDIT = { VAC: VACATION_CREDIT_HOURS, VAX: VACATION_CREDIT_HOURS, PED: PED_CREDIT_HOURS, SICK: 0, SIC: 0, SNG: 0, USIC: 0, ING: 0, PUD: 0, MED: 0, BER: 0 };
+
+// Groups a schedule paste's BER-coded days into bereavement "occurrences", the same concept
+// walkWorkingDayKeys used for the old manual tracker: a gap of ordinary already-off days between
+// two BER-coded stretches doesn't start a new occurrence (bereavement was never going to need to
+// cover a day that wasn't going to be worked anyway), but a gap containing a real WORKING day
+// does. Needs the full scheduleParsed (protectedDayCodes for which days are BER, trips for which
+// days actually have a trip on them) to tell the two kinds of gap apart.
+function groupBerRuns(scheduleParsed) {
+  const berKeys = [...(scheduleParsed.protectedDayCodes || new Map()).entries()].filter(([, c]) => c === "BER").map(([k]) => k).sort();
+  if (!berKeys.length) return [];
+  const workingKeys = new Set();
+  (scheduleParsed.trips || []).forEach((t) => scheduleTripDateKeys(t).forEach((k) => workingKeys.add(k)));
+  const runs = [];
+  let current = [berKeys[0]];
+  for (let i = 1; i < berKeys.length; i++) {
+    let d = adjacentDateKey(berKeys[i - 1], 1);
+    let brokenByWork = false;
+    while (d !== berKeys[i]) {
+      if (workingKeys.has(d)) { brokenByWork = true; break; }
+      d = adjacentDateKey(d, 1);
+    }
+    if (brokenByWork) { runs.push(current); current = [berKeys[i]]; }
+    else current.push(berKeys[i]);
+  }
+  runs.push(current);
+  return runs;
+}
+// The first min(run.length, 3) days of every BER occurrence: always credited flat, no sick bank
+// involved, straight from the schedule paste -- matches the guaranteed-3-days bereavement rule.
+function berGuaranteedCredit(scheduleParsed) {
+  return groupBerRuns(scheduleParsed).reduce((sum, run) => sum + Math.min(run.length, 3) * BEREAVEMENT_CREDIT_HOURS, 0);
+}
+// Day 4 and day 5 of every BER occurrence only -- the contractual cap on how many additional
+// days bereavement can ever cover -- as dispersal slots ready to merge chronologically with
+// Sick/MED entries for the shared Sick Start pool (see the sickDispersal computation below).
+function berExtraDaySlots(scheduleParsed) {
+  const slots = [];
+  groupBerRuns(scheduleParsed).forEach((run) => {
+    run.slice(3, 5).forEach((k) => slots.push({ dateKey: k, neededHours: BEREAVEMENT_CREDIT_HOURS }));
+  });
+  return slots;
+}
 
 function parseSchedule(text, year, month) {
   const rawLines = normalizeScheduleExport(text).split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
@@ -455,7 +509,7 @@ function parseSchedule(text, year, month) {
     if (rest.length && /^\d+(\.\d+)?$/.test(rest[rest.length - 1])) rest = rest.slice(0, -1);
     const key = dateKey(year, month, dayNum);
 
-    if (rest.length === 1 && /^(VAC|VAX|PED|SICK|SIC|SNG|USIC|ING|PUD)$/i.test(rest[0])) {
+    if (rest.length === 1 && /^(VAC|VAX|PED|SICK|SIC|SNG|USIC|ING|PUD|MED|BER)$/i.test(rest[0])) {
       daysOff.add(key);
       vacationDays.add(key);
       protectedDayCodes.set(key, rest[0].toUpperCase());
@@ -714,6 +768,31 @@ export default function DayOffPayPlanner({ session }) {
   const [sdoTripCredits, setSdoTripCredits] = useState(new Map());
   function setSdoTripCredit(key, value) {
     setSdoTripCredits((prev) => { const n = new Map(prev); if (value === "") n.delete(key); else n.set(key, value); return n; });
+  }
+
+  // ---- Sick Bank: Sick Start + manually-entered Sick/MED days, auto-dispersed ----
+  // BER is deliberately not entered here -- it's read straight from the schedule paste (see
+  // groupBerRuns/berGuaranteedCredit/berExtraDaySlots) and its extra days join the same
+  // dispersal pool below. Sick/USIC/MED days have no such run structure -- each is its own
+  // single day, entered with its scheduled credit hours; coverage is decided automatically by
+  // the dispersal, not picked by the user, since the whole point is you tell the tool your
+  // balance once and it works out the rest.
+  const [sickBankSectionOpen, setSickBankSectionOpen] = useState(false);
+  const [sickBankStart, setSickBankStart] = useState("");
+  const [sickMedEntries, setSickMedEntries] = useState([]);
+  const [sickDraftType, setSickDraftType] = useState("SIC");
+  const [sickDraftDay, setSickDraftDay] = useState("");
+  const [sickDraftHours, setSickDraftHours] = useState("");
+  function addSickMedEntry() {
+    const day = parseInt(sickDraftDay, 10);
+    if (!day || day < 1 || day > 31) return;
+    const hours = parseCreditToHours(sickDraftHours);
+    if (hours == null) return;
+    setSickMedEntries((prev) => [...prev, { id: `sickmed-${Date.now()}-${Math.random()}`, type: sickDraftType, day, hoursRaw: sickDraftHours }]);
+    setSickDraftDay(""); setSickDraftHours("");
+  }
+  function removeSickMedEntry(id) {
+    setSickMedEntries((prev) => prev.filter((e) => e.id !== id));
   }
 
   const [gridText, setGridText] = useState("");
@@ -1381,6 +1460,7 @@ export default function DayOffPayPlanner({ session }) {
       tbDropRequested: [...tbDropRequested], tbDropAccepted: [...tbDropAccepted],
       tradeDetails: [...tradeDetails.entries()],
       sdoTripCredits: [...sdoTripCredits.entries()],
+      sickBankSectionOpen, sickBankStart, sickMedEntries,
       notesOpen, notesText, plannerOpen, dayPlans, maxConsecutiveDaysPref, minRestDaysPref, minDaysOffPref,
       tradeSectionOpen, allowSdoTrade, openPotViewerOpen,
       addsReadySectionOpen, addsNearMissSectionOpen, swapsSectionOpen, tbPostSectionOpen, tbAddSectionOpen,
@@ -1483,6 +1563,9 @@ export default function DayOffPayPlanner({ session }) {
       if (d.tbDropAccepted) setTbDropAccepted(new Set(d.tbDropAccepted));
       if (d.tradeDetails) setTradeDetails(new Map(d.tradeDetails));
       if (d.sdoTripCredits) setSdoTripCredits(new Map(d.sdoTripCredits));
+      if (d.sickBankSectionOpen != null) setSickBankSectionOpen(d.sickBankSectionOpen);
+      if (d.sickBankStart != null) setSickBankStart(d.sickBankStart);
+      if (d.sickMedEntries) setSickMedEntries(d.sickMedEntries);
       if (d.notesOpen != null) setNotesOpen(d.notesOpen);
       if (d.notesText != null) setNotesText(d.notesText);
       if (d.plannerOpen != null) setPlannerOpen(d.plannerOpen);
@@ -1767,11 +1850,72 @@ export default function DayOffPayPlanner({ session }) {
     return s;
   }, [liveTrips]);
 
+  // Manually-entered Sick/MED days (Sick Bank tracker below) aren't part of the schedule paste,
+  // but are just as much a protected day off as a VAC/PED line would be -- can't have work put
+  // over them either. BER never needs this: it's read straight from the schedule paste, so
+  // parseSchedule already adds it to vacationDays/protectedDayCodes the same way VAC/PED are.
+  const sickMedProtectedDateKeys = useMemo(() => {
+    const s = new Set();
+    sickMedEntries.forEach((e) => { if (e.day) s.add(dateKey(year, month, e.day)); });
+    return s;
+  }, [sickMedEntries, year, month]);
+  const sickMedProtectedDayCodes = useMemo(() => {
+    const m = new Map();
+    sickMedEntries.forEach((e) => { if (e.day) m.set(dateKey(year, month, e.day), e.type); });
+    return m;
+  }, [sickMedEntries, year, month]);
+
   // VAC/VAX days count as days off but can never be worked over — excluded from every
   // Add/swap-in eligibility check separately from the ordinary days-off availability check.
-  const vacationDateKeys = useMemo(() => (scheduleParsed ? scheduleParsed.vacationDays : new Set()), [scheduleParsed]);
-  const protectedDayCodes = useMemo(() => (scheduleParsed && scheduleParsed.protectedDayCodes ? scheduleParsed.protectedDayCodes : new Map()), [scheduleParsed]);
+  const vacationDateKeys = useMemo(() => {
+    const base = scheduleParsed ? scheduleParsed.vacationDays : new Set();
+    return sickMedProtectedDateKeys.size ? new Set([...base, ...sickMedProtectedDateKeys]) : base;
+  }, [scheduleParsed, sickMedProtectedDateKeys]);
+  const protectedDayCodes = useMemo(() => {
+    const base = scheduleParsed && scheduleParsed.protectedDayCodes ? scheduleParsed.protectedDayCodes : new Map();
+    return sickMedProtectedDayCodes.size ? new Map([...base, ...sickMedProtectedDayCodes]) : base;
+  }, [scheduleParsed, sickMedProtectedDayCodes]);
   function overlapsVacation(dateKeys) { return dateKeys.some((k) => vacationDateKeys.has(k)); }
+
+  // Every schedule-paste BER day's guaranteed (first-3-per-occurrence) credit, unconditional.
+  const berGuaranteedHours = useMemo(() => (scheduleParsed ? berGuaranteedCredit(scheduleParsed) : 0), [scheduleParsed]);
+  // Sick Start dispersal: Sick/MED entries (binary -- fully covered or fully not, per day) and
+  // BER's day-4/day-5 slots (partial -- covers whatever's left in the bank, never subtracts the
+  // rest) merged into one chronological pool and drained in date order. Recomputed fresh from
+  // scratch every render, same as every other preference check in this tool -- never a running
+  // total mutated in place, so editing or removing an entry just naturally updates everything
+  // downstream on the next render.
+  const sickDispersal = useMemo(() => {
+    const startHours = parseCreditToHours(sickBankStart);
+    const berSlots = scheduleParsed ? berExtraDaySlots(scheduleParsed) : [];
+    const items = [
+      ...sickMedEntries.map((e) => ({ kind: "sickmed", id: e.id, dateKey: dateKey(year, month, e.day), neededHours: parseCreditToHours(e.hoursRaw), entry: e })),
+      ...berSlots.map((s, i) => ({ kind: "ber", id: `ber-${s.dateKey}-${i}`, dateKey: s.dateKey, neededHours: s.neededHours })),
+    ].filter((it) => it.neededHours != null).sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+
+    if (startHours == null) {
+      // No Sick Start entered yet -- nothing can be determined, so nothing is credited or
+      // subtracted until a balance is actually provided to disperse.
+      return { results: items.map((it) => ({ ...it, covered: null, coveredHours: 0 })), creditDelta: 0, remaining: null, startHours: null };
+    }
+    let remaining = startHours;
+    let creditDelta = 0;
+    const results = items.map((it) => {
+      if (it.kind === "sickmed") {
+        if (remaining >= it.neededHours) {
+          creditDelta += it.neededHours; remaining -= it.neededHours;
+          return { ...it, covered: true, coveredHours: it.neededHours };
+        }
+        creditDelta -= it.neededHours;
+        return { ...it, covered: false, coveredHours: 0 };
+      }
+      const used = Math.min(remaining, it.neededHours);
+      creditDelta += used; remaining -= used;
+      return { ...it, covered: used >= it.neededHours, coveredHours: used };
+    });
+    return { results, creditDelta, remaining, startHours };
+  }, [sickBankStart, sickMedEntries, scheduleParsed, year, month]);
+  const sickAndBerCreditDelta = berGuaranteedHours + sickDispersal.creditDelta;
 
   // Only injected (Open Time/Trade Board sourced) trips carry known clock times — the original
   // FLICA schedule import has no report/arrival times at all, so rest can't be verified against
@@ -1872,9 +2016,9 @@ export default function DayOffPayPlanner({ session }) {
 
   const updatedCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
-    const offCountThisMonth = [...daysOff].filter((k) => k.startsWith(`${year}-${pad2(month + 1)}`)).length;
+    const offCountThisMonth = [...new Set([...daysOff, ...sickMedProtectedDateKeys])].filter((k) => k.startsWith(`${year}-${pad2(month + 1)}`)).length;
     return renderFlicaCalendar(liveTrips, offCountThisMonth, year, month, baselineCredit, scheduleParsed.summary.block, true, vacationDateKeys, protectedDayCodes);
-  }, [scheduleParsed, liveTrips, daysOff, year, month, baselineCredit, vacationDateKeys, protectedDayCodes]);
+  }, [scheduleParsed, liveTrips, daysOff, sickMedProtectedDateKeys, year, month, baselineCredit, vacationDateKeys, protectedDayCodes]);
 
   function passesTimePref(t) {
     if (!applyTimePref) return true;
@@ -2303,7 +2447,7 @@ export default function DayOffPayPlanner({ session }) {
   }, [projection.includedSwapKeys, combinedSwapRowsByKey, sdoTripCredits]);
   const totalCreditHours = projectedTrips.reduce((s, t) => s + (t.creditHours || 0), 0) + totalSwapCreditDelta;
   const totalBonusPay = projectedTrips.reduce((s, t) => s + (t.pay || 0), 0);
-  const baselineHours = Math.max(parseFloat(baselineCredit) || 0, 0);
+  const baselineHours = Math.max((parseFloat(baselineCredit) || 0) + sickAndBerCreditDelta, 0);
   const workedHours = baselineHours + totalCreditHours;
   const belowFloor = workedHours > 0 && workedHours < 60;
   const daysOffUsed = usedDateKeys.size;
@@ -2339,7 +2483,7 @@ export default function DayOffPayPlanner({ session }) {
   }, [liveTrips, projection, combinedSwapRowsByKey, enrichedOpen]);
 
   const plannedDaysOffSet = useMemo(() => {
-    const s = new Set(daysOff);
+    const s = new Set([...daysOff, ...sickMedProtectedDateKeys]);
     projection.resolved.filter((e) => e.included).forEach((entry) => {
       if (entry.type === "swap") {
         const row = combinedSwapRowsByKey.get(entry.id);
@@ -2354,7 +2498,7 @@ export default function DayOffPayPlanner({ session }) {
       }
     });
     return s;
-  }, [daysOff, projection, combinedSwapRowsByKey, enrichedOpen]);
+  }, [daysOff, sickMedProtectedDateKeys, projection, combinedSwapRowsByKey, enrichedOpen]);
 
   const plannedCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
@@ -2603,28 +2747,34 @@ export default function DayOffPayPlanner({ session }) {
           <span style={{ fontSize: 11, color: "var(--text-faint)" }}>or import a CSV:</span>
           <input type="file" accept=".csv,text/csv" onChange={handleScheduleCSV} style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-secondary)" }} />
         </div>
-        <div className="hint">One line per day: weekday, day number, then pairing code (first day of a trip only) and destination. A day with nothing after the date is a day off. A "VAC", "VAX", "PED", "SICK", "SIC", "SNG", "USIC", "ING", or "PUD" day counts as off but can never be worked over ("ING" and "PUD" both code the same as "SICK"). VAC/VAX credit at {VACATION_CREDIT_HOURS}h and PED (Personal Emergency Day) at {PED_CREDIT_HOURS}h each; the rest — including PUD, PED's unpaid counterpart — carry no credit. Trailing "Credit" line auto-fills your baseline above. A CSV import parses automatically.</div>
+        <div className="hint">One line per day: weekday, day number, then pairing code (first day of a trip only) and destination. A day with nothing after the date is a day off. A "VAC", "VAX", "PED", "SICK", "SIC", "SNG", "USIC", "ING", "PUD", "MED", or "BER" day counts as off but can never be worked over ("ING" and "PUD" both code the same as "SICK"). VAC/VAX credit at {VACATION_CREDIT_HOURS}h and PED (Personal Emergency Day) at {PED_CREDIT_HOURS}h each; BER (bereavement) credits {BEREAVEMENT_CREDIT_HOURS}h/day for the first 3 days of each stretch, more only if your Sick Bank covers it (see Sick Bank below); SICK/SIC/SNG/USIC/ING/PUD/MED carry no credit here, since whether your Sick Bank actually covers them isn't knowable from the schedule paste alone. Trailing "Credit" line auto-fills your baseline above. A CSV import parses automatically.</div>
 
         {scheduleParsed && (
           <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
             {scheduleParsed.trips.length} trip{scheduleParsed.trips.length === 1 ? "" : "s"} found, {scheduleParsed.daysOff.size} day{scheduleParsed.daysOff.size === 1 ? "" : "s"} off parsed
             {scheduleParsed.summary.credit != null && <> · Credit line read as {scheduleParsed.summary.credit}h</>}
             {scheduleParsed.vacationDays.size > 0 && (() => {
-              let vacCount = 0, pedCount = 0, sickCount = 0, totalCredit = 0;
+              let vacCount = 0, pedCount = 0, sickCount = 0, berCount = 0, totalCredit = 0;
               (scheduleParsed.protectedDayCodes || new Map()).forEach((code) => {
-                totalCredit += PROTECTED_DAY_CREDIT[code] || 0;
-                if (code === "VAC" || code === "VAX") vacCount++;
-                else if (code === "PED") pedCount++;
+                if (code === "VAC" || code === "VAX") { vacCount++; totalCredit += PROTECTED_DAY_CREDIT[code] || 0; }
+                else if (code === "PED") { pedCount++; totalCredit += PROTECTED_DAY_CREDIT[code] || 0; }
+                else if (code === "BER") berCount++;
                 else sickCount++;
               });
+              const berCredit = berGuaranteedHours + sickDispersal.results.filter((r) => r.kind === "ber").reduce((s, r) => s + r.coveredHours, 0);
+              totalCredit += berCredit;
               const parts = [];
               if (vacCount > 0) parts.push(`${vacCount} VAC/VAX`);
               if (pedCount > 0) parts.push(`${pedCount} PED`);
-              if (sickCount > 0) parts.push(`${sickCount} Sick`);
+              if (berCount > 0) parts.push(`${berCount} BER`);
+              if (sickCount > 0) parts.push(`${sickCount} Sick/MED`);
               return <> · {parts.join(" + ")} day{scheduleParsed.vacationDays.size === 1 ? "" : "s"} ({totalCredit.toFixed(1)}h credit total, protected from being worked over)</>;
             })()}
             {scheduleParsed.summary.daysOffCount != null && scheduleParsed.summary.daysOffCount !== scheduleParsed.daysOff.size && (
               <span style={{ color: "var(--amber)" }}> · the file's own "Days Off" line says {scheduleParsed.summary.daysOffCount}, which doesn't match — worth a quick check of the source data.</span>
+            )}
+            {[...(scheduleParsed.protectedDayCodes || new Map()).values()].some((c) => c === "SICK" || c === "SIC" || c === "SNG" || c === "USIC" || c === "ING" || c === "PUD" || c === "MED") && (
+              <div style={{ color: "var(--amber-strong)", marginTop: 4 }}>Your schedule has one or more Sick/USIC/MED days on it — since this tool has no way of knowing your Sick Bank balance for the month, the credit hours over those specific days may not be correct. Enter your Sick Start below in Sick Bank to get an actual estimate.</div>
             )}
           </div>
         )}
@@ -2677,6 +2827,83 @@ export default function DayOffPayPlanner({ session }) {
             <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium trips are flagged so swap and trade-board suggestions don't casually give away extra-value trips. Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
           </div>
         )}
+
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setSickBankSectionOpen((v) => !v)}>
+            <div className="h" style={{ marginBottom: 0 }}>Sick Bank</div>
+            <button className="action small" onClick={(e) => { e.stopPropagation(); setSickBankSectionOpen((v) => !v); }}>{sickBankSectionOpen ? "Hide" : "Show"}</button>
+          </div>
+          {sickBankSectionOpen && (
+            <>
+              <div className="hint" style={{ marginTop: 6 }}>
+                Enter your Sick Start for the month (check ELP) and any days you called out sick (SIC/USIC) or short-term medical (MED) along with the credit hours you were scheduled to work that day — coverage is worked out automatically from here, in date order, draining your Sick Start as it goes: a day is either fully covered (added to credit, paid at your normal rate) or fully not (its scheduled hours subtracted), never partial. Any bereavement (BER) day 4 or day 5 found on your pasted schedule joins this same pool too, in the same date order, but partially — it takes whatever's left in the bank up to {BEREAVEMENT_CREDIT_HOURS}h, and whatever it can't cover is simply left unpaid, never subtracted. The first 3 days of any BER stretch are always credited regardless, no Sick Bank needed. Every day entered here is a protected day off, same as VAC or PED — no Add or swap-in recommendation can ever land on it.
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", margin: "10px 0" }}>
+                <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Sick Start (from ELP)</label>
+                <input type="text" value={sickBankStart} onChange={(e) => setSickBankStart(e.target.value)} placeholder="e.g. 2400 for 24h00m" style={{ width: 120 }} />
+                {sickDispersal.startHours != null && (
+                  <span style={{ fontSize: 12, fontFamily: "var(--mono)", color: sickDispersal.remaining < 0 ? "var(--amber-strong)" : "var(--text-secondary)" }}>
+                    Used {formatHours(sickDispersal.startHours - sickDispersal.remaining)} · Remaining {formatHours(sickDispersal.remaining)}
+                  </span>
+                )}
+              </div>
+              {sickDispersal.startHours == null && sickDispersal.results.length > 0 && (
+                <div className="hint" style={{ color: "var(--amber-strong)" }}>Enter your Sick Start above to see which of these days are actually covered — nothing below is credited or subtracted until you do.</div>
+              )}
+
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 12, padding: 10, border: "1px solid var(--border)", borderRadius: 8 }}>
+                <div>
+                  <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>Type</label>
+                  <select value={sickDraftType} onChange={(e) => setSickDraftType(e.target.value)}>
+                    <option value="SIC">Sick (SIC)</option>
+                    <option value="USIC">Sick (USIC)</option>
+                    <option value="MED">Short-term medical (MED)</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>Day</label>
+                  <input type="number" min="1" max="31" value={sickDraftDay} onChange={(e) => setSickDraftDay(e.target.value)} style={{ width: 60 }} />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)" }}>Scheduled credit hrs</label>
+                  <input type="text" value={sickDraftHours} onChange={(e) => setSickDraftHours(e.target.value)} placeholder="e.g. 800" style={{ width: 80 }} />
+                </div>
+                <button className="action" onClick={addSickMedEntry}>Add</button>
+              </div>
+
+              {sickDispersal.results.length > 0 && (
+                <table style={{ marginTop: 14 }}>
+                  <thead><tr><th>Type</th><th>Day</th><th>Hours</th><th>Coverage</th><th>Credit impact</th><th></th></tr></thead>
+                  <tbody>
+                    {sickDispersal.results.map((r) => {
+                      const isBer = r.kind === "ber";
+                      const delta = isBer ? r.coveredHours : (r.covered == null ? 0 : (r.covered ? r.neededHours : -r.neededHours));
+                      const day = parseInt(r.dateKey.slice(-2), 10);
+                      let coverageLabel;
+                      if (r.covered == null) coverageLabel = "Pending — enter Sick Start";
+                      else if (isBer) coverageLabel = r.coveredHours >= r.neededHours ? "Fully covered" : r.coveredHours > 0 ? `Partially covered (${formatHours(r.coveredHours)} of ${formatHours(r.neededHours)})` : "Not covered — unpaid, not subtracted";
+                      else coverageLabel = r.covered ? "Covered by Sick Bank" : "Not covered — subtracted";
+                      return (
+                        <tr key={r.id}>
+                          <td style={{ color: "var(--text-primary)" }}>{isBer ? "BER (from schedule)" : r.entry.type}</td>
+                          <td>Day {day}</td>
+                          <td>{formatHours(r.neededHours)}</td>
+                          <td style={{ fontSize: 12 }}>{coverageLabel}</td>
+                          <td style={{ color: delta >= 0 ? "var(--teal-bright)" : "var(--amber-strong)", fontFamily: "var(--mono)" }}>{r.covered == null ? "—" : formatSignedHours(delta)}</td>
+                          <td>{!isBer && <button className="action small" onClick={() => removeSickMedEntry(r.entry.id)}>Remove</button>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 8 }}>
+                Total credit impact: <span style={{ fontFamily: "var(--mono)", color: sickAndBerCreditDelta >= 0 ? "var(--teal-bright)" : "var(--amber-strong)" }}>{formatSignedHours(sickAndBerCreditDelta)}</span>
+                {" "}({formatMoney(sickAndBerCreditDelta * hourlyRate)}) — {formatHours(berGuaranteedHours)} guaranteed BER, {formatSignedHours(sickDispersal.creditDelta)} from Sick Bank dispersal — folded into your Actual total below.
+              </div>
+            </>
+          )}
+        </div>
 
         {originalCalendarText && (
           <div style={{ marginBottom: 24 }}>
@@ -3499,6 +3726,7 @@ export default function DayOffPayPlanner({ session }) {
             </div>
           </div>
 
+          {sickAndBerCreditDelta !== 0 && <div style={{ fontSize: 12, color: sickAndBerCreditDelta >= 0 ? "var(--teal-bright)" : "var(--amber-strong)", marginTop: 14 }}>Sick Bank / bereavement adjustment folded into your Actual total: {formatSignedHours(sickAndBerCreditDelta)} ({formatMoney(sickAndBerCreditDelta * hourlyRate)}).</div>}
           {swapDependentSelected > 0 && <div style={{ fontSize: 12, color: "var(--amber)", marginTop: 14 }}>{swapDependentSelected} counted trip{swapDependentSelected === 1 ? "" : "s"} depend{swapDependentSelected === 1 ? "s" : ""} on a swap above going through first — the planned total assumes it does.</div>}
           {belowFloor && <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 14 }}>Trips can't be swapped below 60 credit hours in a month — your worked total is under that floor.</div>}
           {daysOffMarked > 0 && daysOffUsed >= daysOffMarked - 1 && <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 14 }}>You're close to using up every marked day off — your contract still requires minimum days off blocks each month, so keep enough clear.</div>}
