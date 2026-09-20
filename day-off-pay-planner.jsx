@@ -2151,6 +2151,39 @@ export default function DayOffPayPlanner() {
   swapPairs.sort((x, y) => (x.wantsOverlap !== y.wantsOverlap ? (x.wantsOverlap ? -1 : 1) : y.totalDaysFreed - x.totalDaysFreed));
   const swapPairsByKey = new Map(swapPairs.map((p) => [p.pairKey, p]));
 
+  // A swap never earns SDO on its own (see the SDO pay rule above) — the only reason to surface
+  // one at all is that it manufactures day(s) off a later Add could land on. So a swap is only
+  // worth recommending if the Opentime pot actually has something, right now, that would become
+  // a genuinely SDO-eligible Add (fully covered by current days off + the days this swap frees)
+  // AND clears every other active preference the same way a normal Add would have to. This is the
+  // single source of truth for that check — both swapInGroups and multiSwapInOptions filter on it
+  // (attaching the result as row.unlockedAdds) rather than each recomputing their own copy.
+  function computeUnlockedAdds(dropKeys, freedKeys, swapInTrips) {
+    const postSwapOccupied = new Set([...occupiedDateKeys].filter((k) => !dropKeys.includes(k)));
+    swapInTrips.forEach((si) => tripDateKeys(si).forEach((k) => postSwapOccupied.add(k)));
+    return enrichedOpen
+      .filter((t) => !t.autoTB && t.fitsTime && t.dateKeys.length > 0 && !t.eligible && !t.onVacation && !t.violatesMinDaysOff && !deniedAddIds.has(t.id) && t.dateKeys.every((k) => daysOff.has(k) || freedKeys.includes(k)))
+      .filter((t) => longestConsecutiveRun(new Set([...postSwapOccupied, ...t.dateKeys])) <= effectiveMaxConsecutive)
+      .filter((t) => !violatesMinRestGap(postSwapOccupied, t.dateKeys, effectiveMinRestDays))
+      .filter((t) => !t.violatesRest)
+      .filter((t) => {
+        const tStart = t.dateKeys[0], tEnd = t.dateKeys[t.dateKeys.length - 1];
+        return swapInTrips.every((si) => {
+          const siKeys = tripDateKeys(si);
+          const siStart = siKeys[0], siEnd = siKeys[siKeys.length - 1];
+          if (adjacentDateKey(tStart, -1) === siEnd && si.arrive && t.report) {
+            const rest = restHours(siEnd, si.arrive, tStart, t.report);
+            if (rest != null && rest < MIN_REST_HOURS) return false;
+          }
+          if (adjacentDateKey(tEnd, 1) === siStart && si.report && t.arrive) {
+            const rest = restHours(tEnd, t.arrive, siStart, si.report);
+            if (rest != null && rest < MIN_REST_HOURS) return false;
+          }
+          return true;
+        });
+      });
+  }
+
   // Group every valid (pair, swap-in) combination by the swap-in trip, so all the ways to
   // manufacture the same days off sit together, ranked by how many days they free. Every valid
   // combination is computed and kept — the caps below are a generous safety limit on rendering,
@@ -2188,9 +2221,12 @@ export default function DayOffPayPlanner() {
         })
         .map((p) => {
           const freedKeys = [...p.a.keys, ...p.b.keys].filter((k) => !sKeys.includes(k));
-          return { pair: p, swapIn: s, swapIns: [s], rowKey: `${p.pairKey}::${s.id}`, freedKeys, freedCount: freedKeys.length };
+          const unlockedAdds = computeUnlockedAdds([...p.a.keys, ...p.b.keys], freedKeys, [s]);
+          return { pair: p, swapIn: s, swapIns: [s], rowKey: `${p.pairKey}::${s.id}`, freedKeys, freedCount: freedKeys.length, unlockedAdds };
         })
         .filter((row) => !deniedSwapKeys.has(row.rowKey))
+        // Only worth recommending if it actually unlocks a currently SDO-eligible, preference-passing Add.
+        .filter((row) => row.unlockedAdds.length > 0)
         .sort((a, b) => b.freedCount - a.freedCount);
       if (allMatchingPairs.length) groups.push({ swapIn: s, rows: allMatchingPairs });
     });
@@ -2200,7 +2236,7 @@ export default function DayOffPayPlanner() {
     // the most days first, cheapest credit as the tiebreaker.
     groups.sort((a, b) => b.rows[0].freedCount - a.rows[0].freedCount || (a.swapIn.creditHours || 0) - (b.swapIn.creditHours || 0));
     return groups;
-  }, [allOpenTrips, swapPairs, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys, year, month]);
+  }, [allOpenTrips, swapPairs, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys, enrichedOpen, daysOff, deniedAddIds, year, month]);
 
   const pairsWithSingleMatch = useMemo(() => {
     const s = new Set();
@@ -2260,16 +2296,20 @@ export default function DayOffPayPlanner() {
           const freedKeys = [...freeable].filter((k) => !combined.has(k));
           const rowKey = `${p.pairKey}::${c1.t.id}+${c2.t.id}`;
           if (deniedSwapKeys.has(rowKey)) continue;
+          const unlockedAdds = computeUnlockedAdds([...p.a.keys, ...p.b.keys], freedKeys, [c1.t, c2.t]);
+          // Same rule as swapInGroups -- only worth recommending if it unlocks a currently
+          // SDO-eligible, preference-passing Add.
+          if (unlockedAdds.length === 0) continue;
           found.push({
             pair: p, swapIns: [c1.t, c2.t], rowKey,
-            freedKeys, freedCount: freedKeys.length,
+            freedKeys, freedCount: freedKeys.length, unlockedAdds,
           });
         }
       }
       results.push(...found);
     });
     return results;
-  }, [swapPairs, pairsWithSingleMatch, allOpenTrips, occupiedDateKeys, vacationDateKeys, dutyReportByDate, dutyArriveByDate, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys, year, month]);
+  }, [swapPairs, pairsWithSingleMatch, allOpenTrips, occupiedDateKeys, vacationDateKeys, dutyReportByDate, dutyArriveByDate, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys, enrichedOpen, daysOff, deniedAddIds, year, month]);
 
   const multiSwapRowsByKey = useMemo(() => {
     const m = new Map();
@@ -3381,31 +3421,10 @@ export default function DayOffPayPlanner() {
                   <button className="action small" onClick={(e) => { e.stopPropagation(); toggleSwapGroupCollapsed(groupKey); }}>{groupCollapsed ? "Show" : "Hide"}</button>
                 </div>
                 {!groupCollapsed && group.rows.map((row) => {
-                  const { pair: p, swapIn, rowKey, freedKeys } = row;
+                  const { pair: p, swapIn, rowKey, freedKeys, unlockedAdds } = row;
                   const swapChecked = selectedSwaps.has(rowKey);
                   const swapAccepted = acceptedSwaps.has(rowKey);
                   const addsShown = showAddsFor.has(rowKey);
-                  const postSwapOccupied = new Set([...occupiedDateKeys].filter((k) => k !== undefined && !p.a.keys.includes(k) && !p.b.keys.includes(k)));
-                  tripDateKeys(swapIn).forEach((k) => postSwapOccupied.add(k));
-                  const unlockedAdds = enrichedOpen
-                    .filter((t) => !t.autoTB && t.fitsTime && t.dateKeys.length > 0 && !t.eligible && !t.onVacation && !deniedAddIds.has(t.id) && t.dateKeys.every((k) => daysOff.has(k) || freedKeys.includes(k)))
-                    .filter((t) => longestConsecutiveRun(new Set([...postSwapOccupied, ...t.dateKeys])) <= effectiveMaxConsecutive)
-                    .filter((t) => !violatesMinRestGap(postSwapOccupied, t.dateKeys, effectiveMinRestDays))
-                    .filter((t) => !t.violatesRest)
-                    .filter((t) => {
-                      const swapInKeys = tripDateKeys(swapIn);
-                      const tStart = t.dateKeys[0], tEnd = t.dateKeys[t.dateKeys.length - 1];
-                      const swapInStart = swapInKeys[0], swapInEnd = swapInKeys[swapInKeys.length - 1];
-                      if (adjacentDateKey(tStart, -1) === swapInEnd && swapIn.arrive && t.report) {
-                        const rest = restHours(swapInEnd, swapIn.arrive, tStart, t.report);
-                        if (rest != null && rest < MIN_REST_HOURS) return false;
-                      }
-                      if (adjacentDateKey(tEnd, 1) === swapInStart && swapIn.report && t.arrive) {
-                        const rest = restHours(tEnd, t.arrive, swapInStart, swapIn.report);
-                        if (rest != null && rest < MIN_REST_HOURS) return false;
-                      }
-                      return true;
-                    });
                   const floorProjection = projectedHoursIfSwapPlanned(rowKey, p, [swapIn]);
                   const wouldViolateFloor = !swapChecked && !swapAccepted && floorProjection != null && floorProjection < 60;
                   return (
