@@ -903,9 +903,12 @@ export default function DayOffPayPlanner() {
 
   const [selected, setSelected] = useState(new Set());
   const [showAddsFor, setShowAddsFor] = useState(new Set());
-  const [collapsedSwapGroups, setCollapsedSwapGroups] = useState(new Set());
+  // Tracks which swap-in groups are explicitly EXPANDED (opt-in), so a group not yet interacted
+  // with defaults to collapsed -- keeps the page from opening with every group's full row detail
+  // sprawled out at once.
+  const [expandedSwapGroups, setExpandedSwapGroups] = useState(new Set());
   function toggleSwapGroupCollapsed(key) {
-    setCollapsedSwapGroups((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+    setExpandedSwapGroups((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   }
   const [calVisible, setCalVisible] = useState({ original: true, planned: true, updated: true });
   const [theme, setTheme] = useState("light");
@@ -3244,7 +3247,7 @@ export default function DayOffPayPlanner() {
           <>
             {swapInGroups.map((group, gi) => {
               const groupKey = group.swapIn.id;
-              const groupCollapsed = collapsedSwapGroups.has(groupKey);
+              const groupCollapsed = !expandedSwapGroups.has(groupKey);
               return (
               <div key={gi} style={{ marginBottom: 18 }}>
                 <div

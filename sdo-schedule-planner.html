@@ -938,9 +938,9 @@ function DayOffPayPlanner() {
   const [tradeParsed, setTradeParsed] = useState({ trips: [], error: null });
   const [selected, setSelected] = useState(/* @__PURE__ */ new Set());
   const [showAddsFor, setShowAddsFor] = useState(/* @__PURE__ */ new Set());
-  const [collapsedSwapGroups, setCollapsedSwapGroups] = useState(/* @__PURE__ */ new Set());
+  const [expandedSwapGroups, setExpandedSwapGroups] = useState(/* @__PURE__ */ new Set());
   function toggleSwapGroupCollapsed(key) {
-    setCollapsedSwapGroups((prev) => {
+    setExpandedSwapGroups((prev) => {
       const n = new Set(prev);
       n.has(key) ? n.delete(key) : n.add(key);
       return n;
@@ -2835,7 +2835,7 @@ function DayOffPayPlanner() {
     setSwapsSectionOpen((v) => !v);
   } }, swapsSectionOpen ? "Hide" : "Show")), swapsSectionOpen && (swapInGroups.length > 0 || multiSwapInOptions.length > 0 ? /* @__PURE__ */ React.createElement(React.Fragment, null, swapInGroups.map((group, gi) => {
     const groupKey = group.swapIn.id;
-    const groupCollapsed = collapsedSwapGroups.has(groupKey);
+    const groupCollapsed = !expandedSwapGroups.has(groupKey);
     return /* @__PURE__ */ React.createElement("div", { key: gi, style: { marginBottom: 18 } }, /* @__PURE__ */ React.createElement(
       "div",
       {
