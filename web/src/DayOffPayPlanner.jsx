@@ -1833,6 +1833,14 @@ export default function DayOffPayPlanner({ session }) {
 
   const hasGridData = combinedGrid.size > 0;
   const gridStatus = (key) => combinedGrid.get(key) || "unknown";
+  // The Reserve Grid only ever covers the one bid month currently loaded -- a trip that starts
+  // or ends in a different month is still fine to drop/swap as long as whatever days actually
+  // fall in THIS month are green. A day outside the loaded month isn't a blocker just because
+  // there's no (and never will be any) grid data for it -- it's simply out of scope, not unknown.
+  function gridOkForMonth(key) {
+    const monthPrefix = `${year}-${pad2(month + 1)}`;
+    return !key.startsWith(monthPrefix) || gridStatus(key) === "green";
+  }
 
   const liveTrips = useMemo(() => {
     if (!scheduleParsed) return [];
@@ -1998,7 +2006,7 @@ export default function DayOffPayPlanner({ session }) {
     return liveTrips.map((t) => {
       const keys = scheduleTripDateKeys(t);
       const statuses = keys.map((k) => ({ key: k, status: gridStatus(k) }));
-      const blocker = statuses.find((s) => s.status !== "green");
+      const blocker = statuses.find((s) => !gridOkForMonth(s.key));
       const key = tripKey(t);
       const isSdo = sdoFlags.has(key);
       const isPremium = premiumFlags.has(key);
@@ -2007,7 +2015,7 @@ export default function DayOffPayPlanner({ session }) {
       const isInjected = injectedKeys.has(key);
       return { ...t, keys, droppable: !blocker && !isSdo && !isLocked, gridBlocked: !!blocker, blocker, key, isSdo, isPremium, isLocked, wantsOverlap, isInjected };
     });
-  }, [scheduleParsed, liveTrips, injectedTrips, combinedGrid, sdoFlags, premiumFlags, lockedFlags, wantedOff]);
+  }, [scheduleParsed, liveTrips, injectedTrips, combinedGrid, sdoFlags, premiumFlags, lockedFlags, wantedOff, year, month]);
 
   const originalCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
@@ -2151,7 +2159,7 @@ export default function DayOffPayPlanner({ session }) {
           // Only days that truly end up freed (not covered by the swap-in) need to be green —
           // a black/red day is fine as long as the swap-in continues to provide coverage there.
           const trulyFreed = [...freeable].filter((k) => !sKeys.includes(k));
-          if (!trulyFreed.every((k) => gridStatus(k) === "green")) return false;
+          if (!trulyFreed.every((k) => gridOkForMonth(k))) return false;
           const postDropOccupied = new Set([...occupiedDateKeys].filter((k) => !freeable.has(k)));
           if (longestConsecutiveRun(new Set([...postDropOccupied, ...sKeys])) > effectiveMaxConsecutive) return false;
           return !violatesMinRestGap(postDropOccupied, sKeys, effectiveMinRestDays);
@@ -2166,7 +2174,7 @@ export default function DayOffPayPlanner({ session }) {
     });
     groups.sort((a, b) => (a.swapIn.creditHours || 0) - (b.swapIn.creditHours || 0));
     return groups;
-  }, [allOpenTrips, swapPairs, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys]);
+  }, [allOpenTrips, swapPairs, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys, year, month]);
 
   const pairsWithSingleMatch = useMemo(() => {
     const s = new Set();
@@ -2218,7 +2226,7 @@ export default function DayOffPayPlanner({ session }) {
           const conflictsOther = [...combined].some((k) => occupiedDateKeys.has(k) && !freeable.has(k));
           if (conflictsOther) continue;
           const trulyFreed = [...freeable].filter((k) => !combined.has(k));
-          if (!trulyFreed.every((k) => gridStatus(k) === "green")) continue;
+          if (!trulyFreed.every((k) => gridOkForMonth(k))) continue;
           const postDropOccupied = new Set([...occupiedDateKeys].filter((k) => !freeable.has(k)));
           const combinedOccupied = new Set([...postDropOccupied, ...combined]);
           if (longestConsecutiveRun(combinedOccupied) > effectiveMaxConsecutive) continue;
@@ -2235,7 +2243,7 @@ export default function DayOffPayPlanner({ session }) {
       results.push(...found);
     });
     return results;
-  }, [swapPairs, pairsWithSingleMatch, allOpenTrips, occupiedDateKeys, vacationDateKeys, dutyReportByDate, dutyArriveByDate, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys]);
+  }, [swapPairs, pairsWithSingleMatch, allOpenTrips, occupiedDateKeys, vacationDateKeys, dutyReportByDate, dutyArriveByDate, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys, year, month]);
 
   const multiSwapRowsByKey = useMemo(() => {
     const m = new Map();

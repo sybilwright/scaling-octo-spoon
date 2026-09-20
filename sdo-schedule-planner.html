@@ -2049,6 +2049,10 @@ function DayOffPayPlanner() {
   }, [gridParsed, manualGridRows, year]);
   const hasGridData = combinedGrid.size > 0;
   const gridStatus = (key) => combinedGrid.get(key) || "unknown";
+  function gridOkForMonth(key) {
+    const monthPrefix = `${year}-${pad2(month + 1)}`;
+    return !key.startsWith(monthPrefix) || gridStatus(key) === "green";
+  }
   const liveTrips = useMemo(() => {
     if (!scheduleParsed) return [];
     return [
@@ -2179,7 +2183,7 @@ function DayOffPayPlanner() {
     return liveTrips.map((t) => {
       const keys = scheduleTripDateKeys(t);
       const statuses = keys.map((k) => ({ key: k, status: gridStatus(k) }));
-      const blocker = statuses.find((s) => s.status !== "green");
+      const blocker = statuses.find((s) => !gridOkForMonth(s.key));
       const key = tripKey(t);
       const isSdo = sdoFlags.has(key);
       const isPremium = premiumFlags.has(key);
@@ -2188,7 +2192,7 @@ function DayOffPayPlanner() {
       const isInjected = injectedKeys.has(key);
       return { ...t, keys, droppable: !blocker && !isSdo && !isLocked, gridBlocked: !!blocker, blocker, key, isSdo, isPremium, isLocked, wantsOverlap, isInjected };
     });
-  }, [scheduleParsed, liveTrips, injectedTrips, combinedGrid, sdoFlags, premiumFlags, lockedFlags, wantedOff]);
+  }, [scheduleParsed, liveTrips, injectedTrips, combinedGrid, sdoFlags, premiumFlags, lockedFlags, wantedOff, year, month]);
   const originalCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
     return renderFlicaCalendar(scheduleParsed.trips, scheduleParsed.daysOff.size, year, month, scheduleParsed.summary.credit, scheduleParsed.summary.block, false, scheduleParsed.vacationDays, scheduleParsed.protectedDayCodes);
@@ -2317,7 +2321,7 @@ function DayOffPayPlanner() {
         const freeable = /* @__PURE__ */ new Set([...p.a.keys, ...p.b.keys]);
         if (!sKeys.every((k) => !occupiedDateKeys.has(k) || freeable.has(k))) return false;
         const trulyFreed = [...freeable].filter((k) => !sKeys.includes(k));
-        if (!trulyFreed.every((k) => gridStatus(k) === "green")) return false;
+        if (!trulyFreed.every((k) => gridOkForMonth(k))) return false;
         const postDropOccupied = new Set([...occupiedDateKeys].filter((k) => !freeable.has(k)));
         if (longestConsecutiveRun(/* @__PURE__ */ new Set([...postDropOccupied, ...sKeys])) > effectiveMaxConsecutive) return false;
         return !violatesMinRestGap(postDropOccupied, sKeys, effectiveMinRestDays);
@@ -2329,7 +2333,7 @@ function DayOffPayPlanner() {
     });
     groups.sort((a, b) => (a.swapIn.creditHours || 0) - (b.swapIn.creditHours || 0));
     return groups;
-  }, [allOpenTrips, swapPairs, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys]);
+  }, [allOpenTrips, swapPairs, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys, year, month]);
   const pairsWithSingleMatch = useMemo(() => {
     const s = /* @__PURE__ */ new Set();
     swapInGroups.forEach((g) => g.rows.forEach((r) => s.add(r.pair.pairKey)));
@@ -2366,7 +2370,7 @@ function DayOffPayPlanner() {
           const conflictsOther = [...combined].some((k) => occupiedDateKeys.has(k) && !freeable.has(k));
           if (conflictsOther) continue;
           const trulyFreed = [...freeable].filter((k) => !combined.has(k));
-          if (!trulyFreed.every((k) => gridStatus(k) === "green")) continue;
+          if (!trulyFreed.every((k) => gridOkForMonth(k))) continue;
           const postDropOccupied = new Set([...occupiedDateKeys].filter((k) => !freeable.has(k)));
           const combinedOccupied = /* @__PURE__ */ new Set([...postDropOccupied, ...combined]);
           if (longestConsecutiveRun(combinedOccupied) > effectiveMaxConsecutive) continue;
@@ -2386,7 +2390,7 @@ function DayOffPayPlanner() {
       results.push(...found);
     });
     return results;
-  }, [swapPairs, pairsWithSingleMatch, allOpenTrips, occupiedDateKeys, vacationDateKeys, dutyReportByDate, dutyArriveByDate, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys]);
+  }, [swapPairs, pairsWithSingleMatch, allOpenTrips, occupiedDateKeys, vacationDateKeys, dutyReportByDate, dutyArriveByDate, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys, year, month]);
   const multiSwapRowsByKey = useMemo(() => {
     const m = /* @__PURE__ */ new Map();
     multiSwapInOptions.forEach((r) => m.set(r.rowKey, r));
