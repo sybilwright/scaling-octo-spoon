@@ -59,6 +59,25 @@ const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 const DOW = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+const BASES = [
+  { code: "DFW", label: "Central \u2013 DFW", tzFamily: "CT" },
+  { code: "CLT", label: "Eastern \u2013 CLT", tzFamily: "ET" },
+  { code: "PHL", label: "Eastern \u2013 PHL", tzFamily: "ET" },
+  { code: "DAY", label: "Eastern \u2013 DAY", tzFamily: "ET" },
+  { code: "DCA", label: "Eastern \u2013 DCA", tzFamily: "ET" }
+];
+const BASE_TZ_FAMILY = new Map(BASES.map((b) => [b.code, b.tzFamily]));
+const TZ_FAMILY_OFFSET_MIN = { CT: 0, ET: 60 };
+function convertTimeToBase(time, fromBase, toBase) {
+  if (!time || !fromBase || !toBase) return time;
+  const fromFamily = BASE_TZ_FAMILY.get(fromBase);
+  const toFamily = BASE_TZ_FAMILY.get(toBase);
+  if (!fromFamily || !toFamily || fromFamily === toFamily) return time;
+  const [h, m] = time.split(":").map(Number);
+  const totalMin = h * 60 + m + (TZ_FAMILY_OFFSET_MIN[toFamily] - TZ_FAMILY_OFFSET_MIN[fromFamily]);
+  const wrapped = (totalMin % 1440 + 1440) % 1440;
+  return `${pad2(Math.floor(wrapped / 60))}:${pad2(wrapped % 60)}`;
+}
 function pad2(n) {
   return String(n).padStart(2, "0");
 }
@@ -253,7 +272,8 @@ function parseTradeBoardExport(text, year) {
       start,
       autoTB: true,
       report: d.report,
-      arrive: d.arrive
+      arrive: d.arrive,
+      base: p.base
     });
   }
   return { trips, error: trips.length === 0 ? "Found the file, but couldn't match any rows to the expected Trade Board export layout." : null };
@@ -780,6 +800,7 @@ function DayOffPayPlanner() {
   const [minReport, setMinReport] = useState("");
   const [maxArrive, setMaxArrive] = useState("");
   const [applyTimePref, setApplyTimePref] = useState(false);
+  const [homeBase, setHomeBase] = useState("DFW");
   const [scheduleText, setScheduleText] = useState("");
   const [scheduleParsed, setScheduleParsed] = useState(null);
   const [sdoFlags, setSdoFlags] = useState(/* @__PURE__ */ new Set());
@@ -1657,6 +1678,7 @@ function DayOffPayPlanner() {
       minReport,
       maxArrive,
       applyTimePref,
+      homeBase,
       scheduleText,
       scheduleParsed: scheduleParsed ? { trips: scheduleParsed.trips, daysOff: [...scheduleParsed.daysOff], vacationDays: [...scheduleParsed.vacationDays], protectedDayCodes: [...(scheduleParsed.protectedDayCodes || /* @__PURE__ */ new Map()).entries()], summary: scheduleParsed.summary } : null,
       sdoFlags: [...sdoFlags],
@@ -1743,6 +1765,7 @@ function DayOffPayPlanner() {
       if (d.minReport != null) setMinReport(d.minReport);
       if (d.maxArrive != null) setMaxArrive(d.maxArrive);
       if (d.applyTimePref != null) setApplyTimePref(d.applyTimePref);
+      if (d.homeBase != null) setHomeBase(d.homeBase);
       if (d.scheduleText != null) setScheduleText(d.scheduleText);
       if (d.scheduleParsed) setScheduleParsed({ trips: d.scheduleParsed.trips, daysOff: new Set(d.scheduleParsed.daysOff), vacationDays: new Set(d.scheduleParsed.vacationDays || []), protectedDayCodes: new Map(d.scheduleParsed.protectedDayCodes || []), summary: d.scheduleParsed.summary });
       if (d.sdoFlags) setSdoFlags(new Set(d.sdoFlags));
@@ -2219,8 +2242,10 @@ function DayOffPayPlanner() {
   }, [scheduleParsed, liveTrips, daysOff, sickMedProtectedDateKeys, year, month, baselineCredit, vacationDateKeys, protectedDayCodes]);
   function passesTimePref(t) {
     if (!applyTimePref) return true;
-    if (minReport && t.report && t.report < minReport) return false;
-    if (maxArrive && t.arrive && t.arrive > maxArrive) return false;
+    const report = t.base ? convertTimeToBase(t.report, t.base, homeBase) : t.report;
+    const arrive = t.base ? convertTimeToBase(t.arrive, t.base, homeBase) : t.arrive;
+    if (minReport && report && report < minReport) return false;
+    if (maxArrive && arrive && arrive > maxArrive) return false;
     return true;
   }
   const allOpenTrips = useMemo(() => {
@@ -2249,7 +2274,7 @@ function DayOffPayPlanner() {
       const violatesMinDaysOff = violatesMinDaysOffFloor(keys);
       return { ...t, dateKeys: keys, overlap, eligible, missing, pay, perDay, fitsTime: passesTimePref(t), usesWanted: keys.some((k) => wantedOff.has(k)), exceedsMaxStreak, violatesRest, violatesMinRest, violatesMinDaysOff, onVacation };
     });
-  }, [allOpenTrips, daysOff, hourlyRate, wantedOff, applyTimePref, minReport, maxArrive, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
+  }, [allOpenTrips, daysOff, hourlyRate, wantedOff, applyTimePref, minReport, maxArrive, homeBase, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
   const eligibleSorted = useMemo(() => enrichedOpen.filter((t) => t.eligible && t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !deniedAddIds.has(t.id)).slice().sort((a, b) => (b.perDay || 0) - (a.perDay || 0)), [enrichedOpen, deniedAddIds]);
   const nearMiss = useMemo(() => enrichedOpen.filter((t) => !t.eligible && !t.autoTB && t.start && t.overlap > 0 && t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !deniedAddIds.has(t.id)).slice().sort((a, b) => a.missing.length - b.missing.length), [enrichedOpen, deniedAddIds]);
   const maxStreakBlockedCount = enrichedOpen.filter((t) => t.eligible && t.exceedsMaxStreak).length;
@@ -2270,7 +2295,7 @@ function DayOffPayPlanner() {
       const missing = keys.filter((k) => !daysOff.has(k));
       return { ...t, dateKeys: keys, overlap, feasible, missing, fitsTime: passesTimePref(t), exceedsMaxStreak, violatesRest, violatesMinRest, violatesMinDaysOff, onVacation };
     }).filter((t) => t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !t.onVacation);
-  }, [tradeParsed, daysOff, applyTimePref, minReport, maxArrive, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
+  }, [tradeParsed, daysOff, applyTimePref, minReport, maxArrive, homeBase, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
   const usedDateKeys = useMemo(() => {
     const s = /* @__PURE__ */ new Set();
     selected.forEach((id) => {
@@ -2741,7 +2766,7 @@ function DayOffPayPlanner() {
       placeholder: "off",
       onChange: (e) => setMinDaysOffPref(e.target.value.replace(/[^\d]/g, ""))
     }
-  ), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--text-faint)" } }, effectiveMinDaysOff > 0 ? `days \u2014 currently enforcing a ${effectiveMinDaysOff}-day floor` : "days \u2014 leave blank to disable")), /* @__PURE__ */ React.createElement("div", { className: "hint", style: { marginTop: 6, marginBottom: 0 } }, "Different from the gap rule above \u2014 this is a floor on the total count of days off left in the whole bid month, not spacing between pickups. If set, no Add or Trade Board recommendation will be offered if taking it would drop your remaining days off this month below this number. Checked fresh against your actual current days off every time, not a one-time snapshot. Doesn't apply to Swaps, since a Swap itself is what manufactures days off rather than spending them.", minDaysOffBlockedCount > 0 && ` ${minDaysOffBlockedCount} otherwise-eligible Add${minDaysOffBlockedCount === 1 ? " is" : "s are"} currently hidden by this.`)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: "1 1 260px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginBottom: 6 } }, "Days you want off (comma-separated, e.g. 12,13,20 or 10/2)"), /* @__PURE__ */ React.createElement("input", { type: "text", value: wantedText, onChange: (e) => setWantedText(e.target.value), style: { width: "100%" }, placeholder: "12,13,20" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginBottom: 6 } }, "Report no earlier than (military time)"), /* @__PURE__ */ React.createElement("input", { type: "text", value: minReport, onChange: (e) => setMinReport(e.target.value), style: { width: 90 }, placeholder: "09:00" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginBottom: 6 } }, "Arrive no later than (military time)"), /* @__PURE__ */ React.createElement("input", { type: "text", value: maxArrive, onChange: (e) => setMaxArrive(e.target.value), style: { width: 90 }, placeholder: "18:00" }))), /* @__PURE__ */ React.createElement("div", { className: "hint", style: { marginTop: -2 } }, "Times are in 24-hour military time \u2014 e.g. 3:00 PM is 15:00, 6:00 PM is 18:00."), /* @__PURE__ */ React.createElement("label", { className: "chk", style: { marginBottom: 24, display: "inline-flex" } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: applyTimePref, onChange: (e) => setApplyTimePref(e.target.checked) }), " Apply start/end time preference to recommendations"), /* @__PURE__ */ React.createElement("div", { className: "step" }, "Step 1"), /* @__PURE__ */ React.createElement("div", { className: "h" }, "Paste your current schedule"), /* @__PURE__ */ React.createElement("textarea", { rows: 6, placeholder: scheduleExample, value: scheduleText, onChange: (e) => setScheduleText(e.target.value) }), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("button", { className: "action", onClick: handleParseSchedule }, "Parse schedule"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "var(--text-faint)" } }, "or import a CSV:"), /* @__PURE__ */ React.createElement("input", { type: "file", accept: ".csv,text/csv", onChange: handleScheduleCSV, style: { fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-secondary)" } })), /* @__PURE__ */ React.createElement("div", { className: "hint" }, 'One line per day: weekday, day number, then pairing code (first day of a trip only) and destination. A day with nothing after the date is a day off. A "VAC", "VAX", "PED", "SICK", "SIC", "SNG", "USIC", "ING", "PUD", "MED", or "BER" day counts as off but can never be worked over ("ING" and "PUD" both code the same as "SICK"). VAC/VAX credit at ', VACATION_CREDIT_HOURS, "h and PED (Personal Emergency Day) at ", PED_CREDIT_HOURS, "h each; BER (bereavement) credits ", BEREAVEMENT_CREDIT_HOURS, `h/day for the first 3 days of each stretch, more only if your Sick Bank covers it (see Sick Bank below); SICK/SIC/SNG/USIC/ING/PUD/MED carry no credit here, since whether your Sick Bank actually covers them isn't knowable from the schedule paste alone. Trailing "Credit" line auto-fills your baseline above. A CSV import parses automatically.`), scheduleParsed && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginBottom: 16 } }, scheduleParsed.trips.length, " trip", scheduleParsed.trips.length === 1 ? "" : "s", " found, ", scheduleParsed.daysOff.size, " day", scheduleParsed.daysOff.size === 1 ? "" : "s", " off parsed", scheduleParsed.summary.credit != null && /* @__PURE__ */ React.createElement(React.Fragment, null, " \xB7 Credit line read as ", scheduleParsed.summary.credit, "h"), scheduleParsed.vacationDays.size > 0 && (() => {
+  ), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "var(--text-faint)" } }, effectiveMinDaysOff > 0 ? `days \u2014 currently enforcing a ${effectiveMinDaysOff}-day floor` : "days \u2014 leave blank to disable")), /* @__PURE__ */ React.createElement("div", { className: "hint", style: { marginTop: 6, marginBottom: 0 } }, "Different from the gap rule above \u2014 this is a floor on the total count of days off left in the whole bid month, not spacing between pickups. If set, no Add or Trade Board recommendation will be offered if taking it would drop your remaining days off this month below this number. Checked fresh against your actual current days off every time, not a one-time snapshot. Doesn't apply to Swaps, since a Swap itself is what manufactures days off rather than spending them.", minDaysOffBlockedCount > 0 && ` ${minDaysOffBlockedCount} otherwise-eligible Add${minDaysOffBlockedCount === 1 ? " is" : "s are"} currently hidden by this.`)), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: "1 1 260px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginBottom: 6 } }, "Days you want off (comma-separated, e.g. 12,13,20 or 10/2)"), /* @__PURE__ */ React.createElement("input", { type: "text", value: wantedText, onChange: (e) => setWantedText(e.target.value), style: { width: "100%" }, placeholder: "12,13,20" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginBottom: 6 } }, "Report no earlier than (military time)"), /* @__PURE__ */ React.createElement("input", { type: "text", value: minReport, onChange: (e) => setMinReport(e.target.value), style: { width: 90 }, placeholder: "09:00" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginBottom: 6 } }, "Arrive no later than (military time)"), /* @__PURE__ */ React.createElement("input", { type: "text", value: maxArrive, onChange: (e) => setMaxArrive(e.target.value), style: { width: 90 }, placeholder: "18:00" })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginBottom: 6 } }, "Your base (time zone)"), /* @__PURE__ */ React.createElement("select", { value: homeBase, onChange: (e) => setHomeBase(e.target.value) }, BASES.map((b) => /* @__PURE__ */ React.createElement("option", { key: b.code, value: b.code }, b.label))))), /* @__PURE__ */ React.createElement("div", { className: "hint", style: { marginTop: -2 } }, "Times are in 24-hour military time, local to the base above \u2014 e.g. 3:00 PM is 15:00, 6:00 PM is 18:00. Trade Board pairings that list a different base (only shown when a FLICA CSV export identifies one) are converted to your base's local time before checking these preferences; the Opentime pot, your own schedule, and other Trade Board paste formats don't carry a base and are assumed to already be in your base's local time."), /* @__PURE__ */ React.createElement("label", { className: "chk", style: { marginBottom: 24, display: "inline-flex" } }, /* @__PURE__ */ React.createElement("input", { type: "checkbox", checked: applyTimePref, onChange: (e) => setApplyTimePref(e.target.checked) }), " Apply start/end time preference to recommendations"), /* @__PURE__ */ React.createElement("div", { className: "step" }, "Step 1"), /* @__PURE__ */ React.createElement("div", { className: "h" }, "Paste your current schedule"), /* @__PURE__ */ React.createElement("textarea", { rows: 6, placeholder: scheduleExample, value: scheduleText, onChange: (e) => setScheduleText(e.target.value) }), /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("button", { className: "action", onClick: handleParseSchedule }, "Parse schedule"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: "var(--text-faint)" } }, "or import a CSV:"), /* @__PURE__ */ React.createElement("input", { type: "file", accept: ".csv,text/csv", onChange: handleScheduleCSV, style: { fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-secondary)" } })), /* @__PURE__ */ React.createElement("div", { className: "hint" }, 'One line per day: weekday, day number, then pairing code (first day of a trip only) and destination. A day with nothing after the date is a day off. A "VAC", "VAX", "PED", "SICK", "SIC", "SNG", "USIC", "ING", "PUD", "MED", or "BER" day counts as off but can never be worked over ("ING" and "PUD" both code the same as "SICK"). VAC/VAX credit at ', VACATION_CREDIT_HOURS, "h and PED (Personal Emergency Day) at ", PED_CREDIT_HOURS, "h each; BER (bereavement) credits ", BEREAVEMENT_CREDIT_HOURS, `h/day for the first 3 days of each stretch, more only if your Sick Bank covers it (see Sick Bank below); SICK/SIC/SNG/USIC/ING/PUD/MED carry no credit here, since whether your Sick Bank actually covers them isn't knowable from the schedule paste alone. Trailing "Credit" line auto-fills your baseline above. A CSV import parses automatically.`), scheduleParsed && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginBottom: 16 } }, scheduleParsed.trips.length, " trip", scheduleParsed.trips.length === 1 ? "" : "s", " found, ", scheduleParsed.daysOff.size, " day", scheduleParsed.daysOff.size === 1 ? "" : "s", " off parsed", scheduleParsed.summary.credit != null && /* @__PURE__ */ React.createElement(React.Fragment, null, " \xB7 Credit line read as ", scheduleParsed.summary.credit, "h"), scheduleParsed.vacationDays.size > 0 && (() => {
     let vacCount = 0, pedCount = 0, sickCount = 0, berCount = 0, totalCredit = 0;
     (scheduleParsed.protectedDayCodes || /* @__PURE__ */ new Map()).forEach((code) => {
       if (code === "VAC" || code === "VAX") {

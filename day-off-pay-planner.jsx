@@ -5,6 +5,36 @@ const MONTH_NAMES = ["January","February","March","April","May","June","July","A
 const WEEKDAYS = ["S","M","T","W","T","F","S"];
 const DOW = ["SU","MO","TU","WE","TH","FR","SA"];
 
+// PSA Airlines domiciles this tool's user could be based out of, and the fixed US time-zone
+// family each one sits in. Central and Eastern never drift relative to each other beyond a flat
+// 60-minute offset (both observe DST on the same US schedule), so converting between them never
+// needs real timezone-arithmetic/DST logic -- just add or subtract an hour based on family.
+const BASES = [
+  { code: "DFW", label: "Central – DFW", tzFamily: "CT" },
+  { code: "CLT", label: "Eastern – CLT", tzFamily: "ET" },
+  { code: "PHL", label: "Eastern – PHL", tzFamily: "ET" },
+  { code: "DAY", label: "Eastern – DAY", tzFamily: "ET" },
+  { code: "DCA", label: "Eastern – DCA", tzFamily: "ET" },
+];
+const BASE_TZ_FAMILY = new Map(BASES.map((b) => [b.code, b.tzFamily]));
+const TZ_FAMILY_OFFSET_MIN = { CT: 0, ET: 60 }; // minutes east of Central
+
+// Converts a "HH:MM" time reported at `fromBase` into the equivalent local time at `toBase`.
+// Only Trade Board's CSV-export format carries a discoverable per-trip base (see
+// parseTradeBoardPairingCell) -- everything else (the user's own Schedule, Opentime pot, and
+// Trade Board's other two paste formats) has no base field to read, so is assumed to already be
+// in the user's selected home-base zone and passes through unchanged.
+function convertTimeToBase(time, fromBase, toBase) {
+  if (!time || !fromBase || !toBase) return time;
+  const fromFamily = BASE_TZ_FAMILY.get(fromBase);
+  const toFamily = BASE_TZ_FAMILY.get(toBase);
+  if (!fromFamily || !toFamily || fromFamily === toFamily) return time;
+  const [h, m] = time.split(":").map(Number);
+  const totalMin = h * 60 + m + (TZ_FAMILY_OFFSET_MIN[toFamily] - TZ_FAMILY_OFFSET_MIN[fromFamily]);
+  const wrapped = ((totalMin % 1440) + 1440) % 1440;
+  return `${pad2(Math.floor(wrapped / 60))}:${pad2(wrapped % 60)}`;
+}
+
 function pad2(n) { return String(n).padStart(2, "0"); }
 function dateKey(y, m, d) { return `${y}-${pad2(m + 1)}-${pad2(d)}`; }
 
@@ -197,7 +227,7 @@ function parseTradeBoardExport(text, year) {
     trips.push({
       id: `${p.pairing}-${p.dateTok}-${r}`,
       pairing: p.pairing, dateTok: p.dateTok, days: d.days, creditHours,
-      layover: d.layover, start, autoTB: true, report: d.report, arrive: d.arrive,
+      layover: d.layover, start, autoTB: true, report: d.report, arrive: d.arrive, base: p.base,
     });
   }
   return { trips, error: trips.length === 0 ? "Found the file, but couldn't match any rows to the expected Trade Board export layout." : null };
@@ -765,6 +795,7 @@ export default function DayOffPayPlanner() {
   const [minReport, setMinReport] = useState("");
   const [maxArrive, setMaxArrive] = useState("");
   const [applyTimePref, setApplyTimePref] = useState(false);
+  const [homeBase, setHomeBase] = useState("DFW");
 
   const [scheduleText, setScheduleText] = useState("");
   const [scheduleParsed, setScheduleParsed] = useState(null);
@@ -1455,7 +1486,7 @@ export default function DayOffPayPlanner() {
       savedAt: Date.now(),
       rate, year, month, baselineCredit,
       daysOff: [...daysOff],
-      wantedText, wantedWeekdays: [...wantedWeekdays], minReport, maxArrive, applyTimePref,
+      wantedText, wantedWeekdays: [...wantedWeekdays], minReport, maxArrive, applyTimePref, homeBase,
       scheduleText,
       scheduleParsed: scheduleParsed ? { trips: scheduleParsed.trips, daysOff: [...scheduleParsed.daysOff], vacationDays: [...scheduleParsed.vacationDays], protectedDayCodes: [...(scheduleParsed.protectedDayCodes || new Map()).entries()], summary: scheduleParsed.summary } : null,
       sdoFlags: [...sdoFlags], premiumFlags: [...premiumFlags], lockedFlags: [...lockedFlags],
@@ -1509,6 +1540,7 @@ export default function DayOffPayPlanner() {
       if (d.minReport != null) setMinReport(d.minReport);
       if (d.maxArrive != null) setMaxArrive(d.maxArrive);
       if (d.applyTimePref != null) setApplyTimePref(d.applyTimePref);
+      if (d.homeBase != null) setHomeBase(d.homeBase);
       if (d.scheduleText != null) setScheduleText(d.scheduleText);
       if (d.scheduleParsed) setScheduleParsed({ trips: d.scheduleParsed.trips, daysOff: new Set(d.scheduleParsed.daysOff), vacationDays: new Set(d.scheduleParsed.vacationDays || []), protectedDayCodes: new Map(d.scheduleParsed.protectedDayCodes || []), summary: d.scheduleParsed.summary });
       if (d.sdoFlags) setSdoFlags(new Set(d.sdoFlags));
@@ -1982,8 +2014,10 @@ export default function DayOffPayPlanner() {
 
   function passesTimePref(t) {
     if (!applyTimePref) return true;
-    if (minReport && t.report && t.report < minReport) return false;
-    if (maxArrive && t.arrive && t.arrive > maxArrive) return false;
+    const report = t.base ? convertTimeToBase(t.report, t.base, homeBase) : t.report;
+    const arrive = t.base ? convertTimeToBase(t.arrive, t.base, homeBase) : t.arrive;
+    if (minReport && report && report < minReport) return false;
+    if (maxArrive && arrive && arrive > maxArrive) return false;
     return true;
   }
 
@@ -2011,7 +2045,7 @@ export default function DayOffPayPlanner() {
       const violatesMinDaysOff = violatesMinDaysOffFloor(keys);
       return { ...t, dateKeys: keys, overlap, eligible, missing, pay, perDay, fitsTime: passesTimePref(t), usesWanted: keys.some((k) => wantedOff.has(k)), exceedsMaxStreak, violatesRest, violatesMinRest, violatesMinDaysOff, onVacation };
     });
-  }, [allOpenTrips, daysOff, hourlyRate, wantedOff, applyTimePref, minReport, maxArrive, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
+  }, [allOpenTrips, daysOff, hourlyRate, wantedOff, applyTimePref, minReport, maxArrive, homeBase, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
 
   const eligibleSorted = useMemo(() => enrichedOpen.filter((t) => t.eligible && t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !deniedAddIds.has(t.id)).slice().sort((a, b) => (b.perDay || 0) - (a.perDay || 0)), [enrichedOpen, deniedAddIds]);
   const nearMiss = useMemo(() => enrichedOpen.filter((t) => !t.eligible && !t.autoTB && t.start && t.overlap > 0 && t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !deniedAddIds.has(t.id)).slice().sort((a, b) => a.missing.length - b.missing.length), [enrichedOpen, deniedAddIds]);
@@ -2034,7 +2068,7 @@ export default function DayOffPayPlanner() {
       const missing = keys.filter((k) => !daysOff.has(k));
       return { ...t, dateKeys: keys, overlap, feasible, missing, fitsTime: passesTimePref(t), exceedsMaxStreak, violatesRest, violatesMinRest, violatesMinDaysOff, onVacation };
     }).filter((t) => t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !t.onVacation);
-  }, [tradeParsed, daysOff, applyTimePref, minReport, maxArrive, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
+  }, [tradeParsed, daysOff, applyTimePref, minReport, maxArrive, homeBase, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
 
   const usedDateKeys = useMemo(() => {
     const s = new Set();
@@ -2697,8 +2731,9 @@ export default function DayOffPayPlanner() {
           </div>
           <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Report no earlier than (military time)</div><input type="text" value={minReport} onChange={(e) => setMinReport(e.target.value)} style={{ width: 90 }} placeholder="09:00" /></div>
           <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Arrive no later than (military time)</div><input type="text" value={maxArrive} onChange={(e) => setMaxArrive(e.target.value)} style={{ width: 90 }} placeholder="18:00" /></div>
+          <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Your base (time zone)</div><select value={homeBase} onChange={(e) => setHomeBase(e.target.value)}>{BASES.map((b) => <option key={b.code} value={b.code}>{b.label}</option>)}</select></div>
         </div>
-        <div className="hint" style={{ marginTop: -2 }}>Times are in 24-hour military time — e.g. 3:00 PM is 15:00, 6:00 PM is 18:00.</div>
+        <div className="hint" style={{ marginTop: -2 }}>Times are in 24-hour military time, local to the base above — e.g. 3:00 PM is 15:00, 6:00 PM is 18:00. Trade Board pairings that list a different base (only shown when a FLICA CSV export identifies one) are converted to your base's local time before checking these preferences; the Opentime pot, your own schedule, and other Trade Board paste formats don't carry a base and are assumed to already be in your base's local time.</div>
         <label className="chk" style={{ marginBottom: 24, display: "inline-flex" }}>
           <input type="checkbox" checked={applyTimePref} onChange={(e) => setApplyTimePref(e.target.checked)} /> Apply start/end time preference to recommendations
         </label>
