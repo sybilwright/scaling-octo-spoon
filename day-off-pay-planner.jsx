@@ -841,6 +841,7 @@ export default function DayOffPayPlanner() {
   const [gridRowError, setGridRowError] = useState(null);
 
   const [openText, setOpenText] = useState("");
+  const [openBase, setOpenBase] = useState(homeBase);
   const [openParsed, setOpenParsed] = useState({ trips: [], error: null });
   const [imageRows, setImageRows] = useState([]);
   const [imgPreview, setImgPreview] = useState(null);
@@ -937,7 +938,19 @@ export default function DayOffPayPlanner() {
   }
 
   const [tradeText, setTradeText] = useState("");
+  const [tradeBase, setTradeBase] = useState(homeBase);
   const [tradeParsed, setTradeParsed] = useState({ trips: [], error: null });
+  function emptyTradeBoardSlot(label, base) {
+    return { label, base, expanded: false, text: "", parsed: { trips: [], error: null } };
+  }
+  const [extraTradeBoards, setExtraTradeBoards] = useState(
+    BASES.filter((b) => b.code !== "DFW").map((b) => emptyTradeBoardSlot(b.label, b.code))
+  );
+  function updateExtraTradeBoard(idx, patch) {
+    setExtraTradeBoards((prev) => prev.map((b, i) => (i === idx ? { ...b, ...(typeof patch === "function" ? patch(b) : patch) } : b)));
+  }
+  function toggleExtraTradeBoardExpanded(idx) { updateExtraTradeBoard(idx, (b) => ({ expanded: !b.expanded })); }
+  function handleExtraTradeBaseChange(idx, value) { updateExtraTradeBoard(idx, { base: value }); }
 
   const [selected, setSelected] = useState(new Set());
   const [showAddsFor, setShowAddsFor] = useState(new Set());
@@ -1447,7 +1460,7 @@ export default function DayOffPayPlanner() {
         layover: potTrip.layover, start: potTrip.start, dateKeys: tripDateKeys(potTrip), report: potTrip.report, arrive: potTrip.arrive,
       };
     } else if (tradeIncomingMode === "board") {
-      const boardTrip = tradeParsed.trips.find((t) => t.id === tradeIncomingBoardId);
+      const boardTrip = allTradeTrips.find((t) => t.id === tradeIncomingBoardId);
       if (!boardTrip) { setTradeFormError("Pick a trip from the loaded Trade Board first."); return; }
       if (!boardTrip.start) { setTradeFormError(`Couldn't read a valid date from ${boardTrip.pairing} — check the Trade Board data.`); return; }
       incoming = {
@@ -1491,9 +1504,9 @@ export default function DayOffPayPlanner() {
       scheduleParsed: scheduleParsed ? { trips: scheduleParsed.trips, daysOff: [...scheduleParsed.daysOff], vacationDays: [...scheduleParsed.vacationDays], protectedDayCodes: [...(scheduleParsed.protectedDayCodes || new Map()).entries()], summary: scheduleParsed.summary } : null,
       sdoFlags: [...sdoFlags], premiumFlags: [...premiumFlags], lockedFlags: [...lockedFlags],
       gridText, manualGridRows, gridParsed: gridParsed ? { ...gridParsed, grid: [...gridParsed.grid.entries()] } : null,
-      openText, openParsed, imageRows,
+      openText, openBase, openParsed, imageRows,
       extraBoards: extraBoards.map((b) => ({ ...b, imgPreview: null, imgBase64: null, imgError: null, imgLoading: false })),
-      tradeText, tradeParsed,
+      tradeText, tradeBase, tradeParsed, extraTradeBoards,
       selected: [...selected], selectedSwaps: [...selectedSwaps],
       acceptedAdds: [...acceptedAdds], acceptedSwaps: [...acceptedSwaps],
       deniedAddIds: [...deniedAddIds], deniedSwapKeys: [...deniedSwapKeys],
@@ -1550,11 +1563,14 @@ export default function DayOffPayPlanner() {
       if (d.gridParsed) setGridParsed({ ...d.gridParsed, grid: new Map(d.gridParsed.grid) });
       if (d.manualGridRows) setManualGridRows(d.manualGridRows);
       if (d.openText != null) setOpenText(d.openText);
+      if (d.openBase != null) setOpenBase(d.openBase);
       if (d.openParsed) setOpenParsed(d.openParsed);
       if (d.imageRows) setImageRows(d.imageRows);
       if (d.extraBoards) setExtraBoards(d.extraBoards);
       if (d.tradeText != null) setTradeText(d.tradeText);
+      if (d.tradeBase != null) setTradeBase(d.tradeBase);
       if (d.tradeParsed) setTradeParsed(d.tradeParsed);
+      if (d.extraTradeBoards) setExtraTradeBoards(d.extraTradeBoards);
       if (d.selected) setSelected(new Set(d.selected));
       if (d.selectedSwaps) setSelectedSwaps(new Set(d.selectedSwaps));
       if (d.acceptedAdds) setAcceptedAdds(new Set(d.acceptedAdds));
@@ -1671,7 +1687,14 @@ export default function DayOffPayPlanner() {
   }
   function handleParseSchedule() { applyScheduleText(scheduleText); }
   function handleParseGrid() { setGridParsed(parseReserveGrid(gridText, year)); }
-  function handleParseOpen() { setOpenParsed(parseBoard(openText, year)); setSelected(new Set()); }
+  // Only Trade Board's CSV-export format ever parses its own per-trip base (see
+  // parseTradeBoardPairingCell) -- everywhere else, a trip keeps whatever base it already
+  // carries and otherwise takes the base selected for the paste box it came from, so every
+  // trip ends up base-tagged for passesTimePref's conversion, not just CSV exports.
+  function tagBase(parsed, base) {
+    return { ...parsed, trips: parsed.trips.map((t) => ({ ...t, base: t.base || base })) };
+  }
+  function handleParseOpen() { setOpenParsed(tagBase(parseBoard(openText, year), openBase)); setSelected(new Set()); }
 
   function readTextFile(file, onText) {
     if (!file) return;
@@ -1694,7 +1717,7 @@ export default function DayOffPayPlanner() {
   }
   function handleOpenCSV(e) {
     const file = e.target.files && e.target.files[0];
-    readTextFile(file, (text) => { setOpenText(text); setOpenParsed(parseBoard(text, year)); setSelected(new Set()); });
+    readTextFile(file, (text) => { setOpenText(text); setOpenParsed(tagBase(parseBoard(text, year), openBase)); setSelected(new Set()); });
     e.target.value = "";
   }
   function looksLikeFlicaTradeExport(text) {
@@ -1712,13 +1735,21 @@ export default function DayOffPayPlanner() {
     const file = e.target.files && e.target.files[0];
     readTextFile(file, (text) => {
       if (looksLikeFlicaTradeRawPaste(text) || looksLikeFlicaTradeExport(text)) {
-        setTradeParsed(parseTradeInput(text));
+        setTradeParsed(tagBase(parseTradeInput(text), tradeBase));
         setTradeText("");
       } else {
         setTradeText(text);
-        setTradeParsed(parseBoard(text, year));
+        setTradeParsed(tagBase(parseBoard(text, year), tradeBase));
       }
     });
+    e.target.value = "";
+  }
+  function handleExtraTradeParseText(idx) {
+    updateExtraTradeBoard(idx, (b) => ({ parsed: tagBase(parseTradeInput(b.text), b.base) }));
+  }
+  function handleExtraTradeCSV(idx, e) {
+    const file = e.target.files && e.target.files[0];
+    readTextFile(file, (text) => updateExtraTradeBoard(idx, (b) => ({ text, parsed: tagBase(parseTradeInput(text), b.base) })));
     e.target.value = "";
   }
 
@@ -1791,7 +1822,7 @@ export default function DayOffPayPlanner() {
   function addBlankImageRow() {
     setImageRows((prev) => [...prev, { id: `${Date.now()}-manual`, pairing: "", dateTok: "", days: "1", report: "", arrive: "", creditRaw: "", layover: "", tb: false }]);
   }
-  function handleParseTrade() { setTradeParsed(parseTradeInput(tradeText)); }
+  function handleParseTrade() { setTradeParsed(tagBase(parseTradeInput(tradeText), tradeBase)); }
 
   function handleAddGridRow() {
     const parsed = parseDateToken(gridDateInput, year);
@@ -2055,8 +2086,13 @@ export default function DayOffPayPlanner() {
   const minDaysOffBlockedCount = enrichedOpen.filter((t) => t.eligible && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && t.violatesMinDaysOff).length;
   const autoFlaggedTB = enrichedOpen.filter((t) => t.autoTB);
 
+  const allTradeTrips = useMemo(() => {
+    const extras = extraTradeBoards.flatMap((b, bi) => b.parsed.trips.map((t) => ({ ...t, id: `xtb${bi}-${t.id}` })));
+    return [...tradeParsed.trips, ...extras];
+  }, [tradeParsed, extraTradeBoards]);
+
   const enrichedTrade = useMemo(() => {
-    return tradeParsed.trips.map((t) => {
+    return allTradeTrips.map((t) => {
       const keys = tripDateKeys(t);
       const overlap = keys.filter((k) => daysOff.has(k)).length;
       const exceedsMaxStreak = keys.length > 0 && longestConsecutiveRun(new Set([...occupiedDateKeys, ...keys])) > effectiveMaxConsecutive;
@@ -2068,7 +2104,7 @@ export default function DayOffPayPlanner() {
       const missing = keys.filter((k) => !daysOff.has(k));
       return { ...t, dateKeys: keys, overlap, feasible, missing, fitsTime: passesTimePref(t), exceedsMaxStreak, violatesRest, violatesMinRest, violatesMinDaysOff, onVacation };
     }).filter((t) => t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !t.onVacation);
-  }, [tradeParsed, daysOff, applyTimePref, minReport, maxArrive, homeBase, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
+  }, [allTradeTrips, daysOff, applyTimePref, minReport, maxArrive, homeBase, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
 
   const usedDateKeys = useMemo(() => {
     const s = new Set();
@@ -2333,7 +2369,7 @@ export default function DayOffPayPlanner() {
     const outgoingCandidates = droppableTrips.filter((t) => !t.isSdo && !t.isLocked && parseCreditToHours(sdoTripCredits.get(t.key)) != null);
     const incomingCandidates = [
       ...allOpenTrips.filter((t) => !t.autoTB && t.creditHours != null),
-      ...tradeParsed.trips.filter((t) => t.creditHours != null),
+      ...allTradeTrips.filter((t) => t.creditHours != null),
     ];
     const pairs = [];
     outgoingCandidates.forEach((o) => {
@@ -2344,7 +2380,7 @@ export default function DayOffPayPlanner() {
     });
     pairs.sort((a, b) => a.delta - b.delta);
     return pairs;
-  }, [droppableTrips, sdoTripCredits, allOpenTrips, tradeParsed]);
+  }, [droppableTrips, sdoTripCredits, allOpenTrips, allTradeTrips]);
   function getFloorFixSuggestions(shortfall, excludeKeys) {
     if (shortfall == null || shortfall <= 0) return [];
     const suggestions = [];
@@ -3007,7 +3043,10 @@ export default function DayOffPayPlanner() {
         <div className="hint">Teal = currently off. Amber outline = a day you want off (from the field above) — thicker border means both. {daysOffMarked} day{daysOffMarked === 1 ? "" : "s"} currently marked off.</div>
 
         <div className="step">Step 3</div>
-        <div className="h">Paste the Opentime pot (Adds — eligible for Day Off Pay / SDO)</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div className="h" style={{ marginBottom: 0 }}>Paste the Opentime pot (Adds — eligible for Day Off Pay / SDO)</div>
+          <select value={openBase} onChange={(e) => setOpenBase(e.target.value)} style={{ fontSize: 12 }}>{BASES.map((b) => <option key={b.code} value={b.code}>{b.label}</option>)}</select>
+        </div>
         <textarea rows={5} placeholder={boardExample} value={openText} onChange={(e) => setOpenText(e.target.value)} />
         <div style={{ marginTop: 10, marginBottom: 20, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
           <button className="action" onClick={handleParseOpen}>Parse Opentime pot</button>
@@ -3175,7 +3214,10 @@ export default function DayOffPayPlanner() {
         </div>
 
         <div className="step">Step 4 (optional)</div>
-        <div className="h">Paste Trade Board pairings (not eligible for SDO)</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div className="h" style={{ marginBottom: 0 }}>Paste Trade Board pairings (not eligible for SDO)</div>
+          <select value={tradeBase} onChange={(e) => setTradeBase(e.target.value)} style={{ fontSize: 12 }}>{BASES.map((b) => <option key={b.code} value={b.code}>{b.label}</option>)}</select>
+        </div>
         <textarea rows={4} placeholder={boardExample} value={tradeText} onChange={(e) => setTradeText(e.target.value)} />
         <div style={{ marginTop: 10, marginBottom: 8, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
           <button className="action" onClick={handleParseTrade}>Parse trade board</button>
@@ -3183,7 +3225,44 @@ export default function DayOffPayPlanner() {
           <input type="file" accept=".csv,text/csv" onChange={handleTradeCSV} style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-secondary)" }} />
           {tradeParsed.error && <span style={{ fontSize: 13, color: "var(--amber-strong)" }}>{tradeParsed.error}</span>}
         </div>
-        <div className="hint">A "TB" tag pasted into the Opentime pot box above is auto-detected and excluded from SDO too, but keep them separate here to avoid confusion. A CSV exported directly from FLICA's Trade Board page (the jammed-together multi-line format) is detected automatically and read correctly — no reformatting needed.</div>
+        <div className="hint">A "TB" tag pasted into the Opentime pot box above is auto-detected and excluded from SDO too, but keep them separate here to avoid confusion. A CSV exported directly from FLICA's Trade Board page (the jammed-together multi-line format) is detected automatically and read correctly — no reformatting needed. The base dropdown tags every pairing from this paste with that base's time zone for the report/arrive preference checks — a CSV export's own per-pairing base (when it has one) always wins over this.</div>
+
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>Other bases' Trade Board pairings (optional)</div>
+          {extraTradeBoards.map((board, idx) => (
+            <div key={idx} style={{ border: "1px solid var(--border)", borderRadius: 8, marginBottom: 8 }}>
+              <button
+                onClick={() => toggleExtraTradeBoardExpanded(idx)}
+                style={{ width: "100%", textAlign: "left", background: "transparent", border: "none", padding: "10px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, color: "var(--text-secondary)", fontFamily: "var(--sans)", fontSize: 13 }}
+              >
+                <span style={{ transform: board.expanded ? "rotate(90deg)" : "none", transition: "transform 0.15s", display: "inline-block", color: "var(--text-faint)" }}>▶</span>
+                <span>{board.label}</span>
+                <select
+                  value={board.base}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => handleExtraTradeBaseChange(idx, e.target.value)}
+                  style={{ fontSize: 12 }}
+                >
+                  {BASES.map((b) => <option key={b.code} value={b.code}>{b.label}</option>)}
+                </select>
+                <span style={{ fontSize: 11, color: "var(--text-faint)" }}>
+                  {board.parsed.trips.length > 0 ? `${board.parsed.trips.length} trip(s) loaded` : "empty"}
+                </span>
+              </button>
+              {board.expanded && (
+                <div style={{ padding: "0 12px 14px 12px" }}>
+                  <textarea rows={4} placeholder={boardExample} value={board.text} onChange={(e) => updateExtraTradeBoard(idx, { text: e.target.value })} />
+                  <div style={{ marginTop: 10, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                    <button className="action small" onClick={() => handleExtraTradeParseText(idx)}>Parse trade board</button>
+                    <span style={{ fontSize: 11, color: "var(--text-faint)" }}>or import a CSV:</span>
+                    <input type="file" accept=".csv,text/csv" onChange={(e) => handleExtraTradeCSV(idx, e)} style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-secondary)" }} />
+                    {board.parsed.error && <span style={{ fontSize: 13, color: "var(--amber-strong)" }}>{board.parsed.error}</span>}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
 
         {autoFlaggedTB.length > 0 && <div className="hint">{autoFlaggedTB.length} row{autoFlaggedTB.length === 1 ? "" : "s"} in the Opentime pot paste had a "TB" tag and {autoFlaggedTB.length === 1 ? "was" : "were"} auto-excluded.</div>}
         {maxStreakBlockedCount > 0 && <div className="hint">{maxStreakBlockedCount} otherwise-eligible Add{maxStreakBlockedCount === 1 ? "" : "s"} hidden — picking {maxStreakBlockedCount === 1 ? "it" : "them"} up would put you on more than {effectiveMaxConsecutive} consecutive working days.</div>}
@@ -3631,7 +3710,7 @@ export default function DayOffPayPlanner() {
                   ) : tradeIncomingMode === "board" ? (
                     <select value={tradeIncomingBoardId} onChange={(e) => setTradeIncomingBoardId(e.target.value)} style={{ width: "100%" }}>
                       <option value="">Select a Trade Board pairing…</option>
-                      {tradeParsed.trips.map((t) => (
+                      {allTradeTrips.map((t) => (
                         <option key={t.id} value={t.id}>{t.pairing} — {t.dateTok} +{t.days - 1}d, {formatHours(t.creditHours)}</option>
                       ))}
                     </select>
