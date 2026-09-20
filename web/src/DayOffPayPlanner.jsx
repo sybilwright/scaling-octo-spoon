@@ -904,6 +904,10 @@ export default function DayOffPayPlanner({ session }) {
 
   const [selected, setSelected] = useState(new Set());
   const [showAddsFor, setShowAddsFor] = useState(new Set());
+  const [collapsedSwapGroups, setCollapsedSwapGroups] = useState(new Set());
+  function toggleSwapGroupCollapsed(key) {
+    setCollapsedSwapGroups((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  }
   const [calVisible, setCalVisible] = useState({ original: true, planned: true, updated: true });
   const [theme, setTheme] = useState("light");
   function toggleTheme() { setTheme((t) => (t === "dark" ? "light" : "dark")); }
@@ -2172,7 +2176,11 @@ export default function DayOffPayPlanner({ session }) {
         .sort((a, b) => b.freedCount - a.freedCount);
       if (allMatchingPairs.length) groups.push({ swapIn: s, rows: allMatchingPairs });
     });
-    groups.sort((a, b) => (a.swapIn.creditHours || 0) - (b.swapIn.creditHours || 0));
+    // Rows within a group are already sorted by freedCount descending (see the .sort right
+    // above), so each group's own best option -- and therefore its max potential days freed --
+    // is always rows[0]. Groups themselves are ranked the same way: whichever swap-in can free
+    // the most days first, cheapest credit as the tiebreaker.
+    groups.sort((a, b) => b.rows[0].freedCount - a.rows[0].freedCount || (a.swapIn.creditHours || 0) - (b.swapIn.creditHours || 0));
     return groups;
   }, [allOpenTrips, swapPairs, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, deniedSwapKeys, year, month]);
 
@@ -3296,12 +3304,21 @@ export default function DayOffPayPlanner({ session }) {
         </div>
         {swapsSectionOpen && ((swapInGroups.length > 0 || multiSwapInOptions.length > 0) ? (
           <>
-            {swapInGroups.map((group, gi) => (
+            {swapInGroups.map((group, gi) => {
+              const groupKey = group.swapIn.id;
+              const groupCollapsed = collapsedSwapGroups.has(groupKey);
+              return (
               <div key={gi} style={{ marginBottom: 18 }}>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--text-muted)", marginBottom: 8 }}>
-                  Swap into <span style={{ color: "var(--text-primary)" }}>{group.swapIn.pairing}</span> ({group.swapIn.dateTok} +{group.swapIn.days - 1}d, {formatHours(group.swapIn.creditHours)} credit) — {group.rows.length} way{group.rows.length === 1 ? "" : "s"} to get there
+                <div
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", gap: 8 }}
+                  onClick={() => toggleSwapGroupCollapsed(groupKey)}
+                >
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--text-muted)", marginBottom: 8 }}>
+                    Swap into <span style={{ color: "var(--text-primary)" }}>{group.swapIn.pairing}</span> ({group.swapIn.dateTok} +{group.swapIn.days - 1}d, {formatHours(group.swapIn.creditHours)} credit) — {group.rows.length} way{group.rows.length === 1 ? "" : "s"} to get there — most potential days freed: {group.rows[0].freedCount}
+                  </div>
+                  <button className="action small" onClick={(e) => { e.stopPropagation(); toggleSwapGroupCollapsed(groupKey); }}>{groupCollapsed ? "Show" : "Hide"}</button>
                 </div>
-                {group.rows.map((row) => {
+                {!groupCollapsed && group.rows.map((row) => {
                   const { pair: p, swapIn, rowKey, freedKeys } = row;
                   const swapChecked = selectedSwaps.has(rowKey);
                   const swapAccepted = acceptedSwaps.has(rowKey);
@@ -3429,7 +3446,8 @@ export default function DayOffPayPlanner({ session }) {
                   );
                 })}
               </div>
-            ))}
+              );
+            })}
             {multiSwapInOptions.length > 0 && (
               <div style={{ marginBottom: 18 }}>
                 <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--text-muted)", marginBottom: 8 }}>
