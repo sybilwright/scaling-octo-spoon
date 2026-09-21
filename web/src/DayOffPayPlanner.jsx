@@ -1733,7 +1733,22 @@ export default function DayOffPayPlanner({ session }) {
   function applyScheduleText(text) {
     const result = parseSchedule(text, year, month);
     setScheduleParsed(result);
-    if (result.daysOff.size) addDaysOff(Array.from(result.daysOff));
+    // Re-parsing (e.g. pasting a freshly-exported schedule that now shows a trip picked up for
+    // real in FLICA, outside this tool, on a day that used to be off) must reconcile daysOff
+    // against the FRESH parse's own trips, not just union the new parse's days-off into whatever
+    // was already there -- addDaysOff only ever adds, so a day this fresh parse now shows as
+    // occupied would otherwise stay stranded in daysOff forever, contradicting the schedule that
+    // was just pasted and making every Add overlapping it look falsely eligible. Any day the
+    // fresh parse's own trips actually occupy is cleared here even if something earlier (a stale
+    // parse, a prior approval) had marked it off.
+    const freshlyOccupied = new Set();
+    result.trips.forEach((t) => scheduleTripDateKeys(t).forEach((k) => freshlyOccupied.add(k)));
+    setDaysOff((prev) => {
+      const n = new Set(prev);
+      result.daysOff.forEach((k) => n.add(k));
+      freshlyOccupied.forEach((k) => n.delete(k));
+      return n;
+    });
     if (result.summary.credit != null) setBaselineCredit(String(result.summary.credit));
     // A schedule trip whose pairing+date exactly matches an Open Time Add you'd already marked
     // "Planned" is one you clearly meant to pick up for SDO -- if it's now showing up for real

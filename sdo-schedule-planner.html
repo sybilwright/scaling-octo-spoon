@@ -1907,7 +1907,14 @@ function DayOffPayPlanner() {
   function applyScheduleText(text) {
     const result = parseSchedule(text, year, month);
     setScheduleParsed(result);
-    if (result.daysOff.size) addDaysOff(Array.from(result.daysOff));
+    const freshlyOccupied = /* @__PURE__ */ new Set();
+    result.trips.forEach((t) => scheduleTripDateKeys(t).forEach((k) => freshlyOccupied.add(k)));
+    setDaysOff((prev) => {
+      const n = new Set(prev);
+      result.daysOff.forEach((k) => n.add(k));
+      freshlyOccupied.forEach((k) => n.delete(k));
+      return n;
+    });
     if (result.summary.credit != null) setBaselineCredit(String(result.summary.credit));
     const plannedAddIdentities = new Set(
       enrichedOpen.filter((t) => selected.has(t.id) && t.start).map((t) => tripKey({ pairing: t.pairing, startYear: t.start.year, startMonth: t.start.month, startDay: t.start.day }))
