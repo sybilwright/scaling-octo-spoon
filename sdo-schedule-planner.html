@@ -1888,7 +1888,9 @@ function DayOffPayPlanner() {
   function addDaysOff(keys) {
     setDaysOff((prev) => {
       const n = new Set(prev);
-      keys.forEach((k) => n.add(k));
+      keys.forEach((k) => {
+        if (!occupiedDateKeys.has(k)) n.add(k);
+      });
       return n;
     });
   }
@@ -2926,7 +2928,9 @@ function DayOffPayPlanner() {
     setAddsNearMissSectionOpen((v) => !v);
   } }, addsNearMissSectionOpen ? "Hide" : "Show")), addsNearMissSectionOpen && /* @__PURE__ */ React.createElement("table", { style: { marginBottom: 24 } }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", null, /* @__PURE__ */ React.createElement("th", null, "Pairing"), /* @__PURE__ */ React.createElement("th", null, "Dates"), /* @__PURE__ */ React.createElement("th", null, "Credit"), /* @__PURE__ */ React.createElement("th", null, "Needs"), /* @__PURE__ */ React.createElement("th", null))), /* @__PURE__ */ React.createElement("tbody", null, nearMiss.map((t) => {
     const swapConflict = getPlannedSwapConflict(t);
-    return /* @__PURE__ */ React.createElement("tr", { key: t.id }, /* @__PURE__ */ React.createElement("td", { style: { color: "var(--text-primary)" } }, t.pairing, swapConflict && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 } }, "Not possible right now \u2014 ", swapConflict.label, " would take over this day if approved.")), /* @__PURE__ */ React.createElement("td", null, t.dateTok, " +", t.days - 1, "d"), /* @__PURE__ */ React.createElement("td", null, formatHours(t.creditHours)), /* @__PURE__ */ React.createElement("td", { style: { color: "var(--amber-strong)" } }, t.missing.length, " more day", t.missing.length === 1 ? "" : "s", " off"), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("button", { className: "action small", onClick: () => addDaysOff(t.missing) }, "Mark those days off")));
+    const missingOccupied = t.missing.filter((k) => occupiedDateKeys.has(k));
+    const allMissingBlocked = missingOccupied.length === t.missing.length;
+    return /* @__PURE__ */ React.createElement("tr", { key: t.id }, /* @__PURE__ */ React.createElement("td", { style: { color: "var(--text-primary)" } }, t.pairing, swapConflict && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 } }, "Not possible right now \u2014 ", swapConflict.label, " would take over this day if approved."), missingOccupied.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 } }, missingOccupied.length, " of the missing day", missingOccupied.length === 1 ? "" : "s", " already ", missingOccupied.length === 1 ? "has" : "have", " a trip on it \u2014 drop it via a Swap first, this button can't override that.")), /* @__PURE__ */ React.createElement("td", null, t.dateTok, " +", t.days - 1, "d"), /* @__PURE__ */ React.createElement("td", null, formatHours(t.creditHours)), /* @__PURE__ */ React.createElement("td", { style: { color: "var(--amber-strong)" } }, t.missing.length, " more day", t.missing.length === 1 ? "" : "s", " off"), /* @__PURE__ */ React.createElement("td", null, /* @__PURE__ */ React.createElement("button", { className: "action small", disabled: allMissingBlocked, onClick: () => addDaysOff(t.missing) }, "Mark those days off")));
   })))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }, onClick: () => setSwapsSectionOpen((v) => !v) }, /* @__PURE__ */ React.createElement("div", { className: "h", style: { marginBottom: 0 } }, "Swaps \u2014 every way to manufacture days off, grouped by what you'd swap into"), /* @__PURE__ */ React.createElement("button", { className: "action small", onClick: (e) => {
     e.stopPropagation();
     setSwapsSectionOpen((v) => !v);

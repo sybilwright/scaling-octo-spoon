@@ -1651,8 +1651,17 @@ export default function DayOffPayPlanner() {
   function toggleDayOff(key) {
     setDaysOff((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   }
+  // Never marks a day "off" that's actually occupied by a live trip -- daysOff and the real
+  // schedule (occupiedDateKeys) would otherwise silently contradict each other, and every
+  // downstream eligibility check trusts daysOff alone. A day genuinely needs to be freed (drop
+  // the trip on it, via a Swap) before it can be marked off; this only ever fills in a day that
+  // simply wasn't marked off for some other reason.
   function addDaysOff(keys) {
-    setDaysOff((prev) => { const n = new Set(prev); keys.forEach((k) => n.add(k)); return n; });
+    setDaysOff((prev) => {
+      const n = new Set(prev);
+      keys.forEach((k) => { if (!occupiedDateKeys.has(k)) n.add(k); });
+      return n;
+    });
   }
   function tripKey(t) { return `${t.pairing}-${t.startYear}-${t.startMonth}-${t.startDay}`; }
   function toggleFlag(setFn, key) {
@@ -3376,6 +3385,11 @@ export default function DayOffPayPlanner() {
               <tbody>
                 {nearMiss.map((t) => {
                   const swapConflict = getPlannedSwapConflict(t);
+                  // A missing day already carrying a live trip can't just be marked off -- that
+                  // trip needs to actually be dropped (see Swaps) first, or this button would
+                  // silently claim the day is free while the real schedule still has it occupied.
+                  const missingOccupied = t.missing.filter((k) => occupiedDateKeys.has(k));
+                  const allMissingBlocked = missingOccupied.length === t.missing.length;
                   return (
                     <tr key={t.id}>
                       <td style={{ color: "var(--text-primary)" }}>
@@ -3385,11 +3399,16 @@ export default function DayOffPayPlanner() {
                             Not possible right now — {swapConflict.label} would take over this day if approved.
                           </div>
                         )}
+                        {missingOccupied.length > 0 && (
+                          <div style={{ fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
+                            {missingOccupied.length} of the missing day{missingOccupied.length === 1 ? "" : "s"} already {missingOccupied.length === 1 ? "has" : "have"} a trip on it — drop it via a Swap first, this button can't override that.
+                          </div>
+                        )}
                       </td>
                       <td>{t.dateTok} +{t.days - 1}d</td>
                       <td>{formatHours(t.creditHours)}</td>
                       <td style={{ color: "var(--amber-strong)" }}>{t.missing.length} more day{t.missing.length === 1 ? "" : "s"} off</td>
-                      <td><button className="action small" onClick={() => addDaysOff(t.missing)}>Mark those days off</button></td>
+                      <td><button className="action small" disabled={allMissingBlocked} onClick={() => addDaysOff(t.missing)}>Mark those days off</button></td>
                     </tr>
                   );
                 })}
