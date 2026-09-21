@@ -1341,7 +1341,7 @@ export default function DayOffPayPlanner({ session }) {
   const [tradeSectionOpen, setTradeSectionOpen] = useState(false);
   const [openPotViewerOpen, setOpenPotViewerOpen] = useState(false);
   const [addsReadySectionOpen, setAddsReadySectionOpen] = useState(true);
-  const [addsNearMissSectionOpen, setAddsNearMissSectionOpen] = useState(true);
+  const [addsNearMissSectionOpen, setAddsNearMissSectionOpen] = useState(false);
   const [swapsSectionOpen, setSwapsSectionOpen] = useState(true);
   const [tbPostSectionOpen, setTbPostSectionOpen] = useState(true);
   const [tbAddSectionOpen, setTbAddSectionOpen] = useState(true);
