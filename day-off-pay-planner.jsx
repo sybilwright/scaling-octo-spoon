@@ -2040,8 +2040,12 @@ export default function DayOffPayPlanner() {
   const updatedCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
     const offCountThisMonth = [...new Set([...daysOff, ...sickMedProtectedDateKeys])].filter((k) => k.startsWith(`${year}-${pad2(month + 1)}`)).length;
-    return renderFlicaCalendar(liveTrips, offCountThisMonth, year, month, baselineCredit, scheduleParsed.summary.block, true, vacationDateKeys, protectedDayCodes);
-  }, [scheduleParsed, liveTrips, daysOff, sickMedProtectedDateKeys, year, month, baselineCredit, vacationDateKeys, protectedDayCodes]);
+    // Matches the bold total shown alongside this panel (baselineHours) -- raw baselineCredit
+    // alone would silently omit the always-fresh sick/BER credit delta, showing a different
+    // number here than the one right next to it.
+    const updatedTotalCreditHours = Math.max((parseFloat(baselineCredit) || 0) + sickAndBerCreditDelta, 0);
+    return renderFlicaCalendar(liveTrips, offCountThisMonth, year, month, updatedTotalCreditHours.toFixed(2), scheduleParsed.summary.block, true, vacationDateKeys, protectedDayCodes);
+  }, [scheduleParsed, liveTrips, daysOff, sickMedProtectedDateKeys, year, month, baselineCredit, sickAndBerCreditDelta, vacationDateKeys, protectedDayCodes]);
 
   function passesTimePref(t) {
     if (!applyTimePref) return true;
@@ -2369,11 +2373,14 @@ export default function DayOffPayPlanner() {
   // is deliberate: it lets every alternative be marked Planned freely to compare/prioritize them
   // below, and the floor only actually blocks anything once a swap is truly Approved (which does
   // mutate baselineCredit for real, so the next projection is naturally checked against that).
+  // Uses baselineHours (baselineCredit plus the always-fresh sick/BER credit delta), not raw
+  // baselineCredit alone -- otherwise an uncovered Sick/MED day that's already dragging the real
+  // worked total under 60 could be invisible here, silently letting a swap through that drops the
+  // true total even further below the floor.
   function projectedHoursIfSwapPlanned(pair, swapIns) {
     const adj = computeSwapCreditAdjustment(pair, swapIns);
     if (adj == null) return null;
-    const baseline = Math.max(parseFloat(baselineCredit) || 0, 0);
-    return baseline + adj;
+    return baselineHours + adj;
   }
 
   // ---- Floor-fix suggestions: when a swap would drop worked hours under 60, surface the
@@ -2438,47 +2445,51 @@ export default function DayOffPayPlanner() {
   const gridBlockedCount = droppableTrips.filter((t) => !t.droppable && !t.isSdo && t.gridBlocked).length;
   const gridUnknownCount = droppableTrips.filter((t) => !t.droppable && !t.isSdo && !t.gridBlocked).length;
 
-  // ---- Priority projection: walk the planned order highest-to-lowest priority, including each
-  // entry only if it doesn't conflict with a higher-priority pick already locked in. Accepted
-  // changes are handled entirely separately (already baked into daysOff/baseline) and always count.
+  // ---- Priority projection: only the single highest-priority planned entry is ever shown on the
+  // Planned preview -- never a stack of several non-conflicting lower-priority picks layered
+  // together. Several Planned rows are very often mutually-exclusive alternatives for the same
+  // end result (see the 60-hour floor note above), so previewing more than one of them at once as
+  // if they'd all really happen would be misleading. Reorder "Your plan" below to preview a
+  // different pick. Accepted changes are handled entirely separately (already baked into
+  // daysOff/baseline) and always count, regardless of this.
   const projection = useMemo(() => {
     const activeOrder = plannedOrder.filter((e) => (e.type === "add" ? !acceptedAdds.has(e.id) && !deniedAddIds.has(e.id) : !acceptedSwaps.has(e.id) && !deniedSwapKeys.has(e.id)));
-    const availableDates = new Set(daysOff);
-    const usedTripKeys = new Set();
     const includedAddIds = new Set();
     const includedSwapKeys = new Set();
     const resolved = [];
-    const claimedSwapInDates = new Set();
+    let topIncluded = false;
 
     activeOrder.forEach((entry, idx) => {
+      if (topIncluded) {
+        const label = entry.type === "swap"
+          ? (() => {
+              const row = combinedSwapRowsByKey.get(entry.id);
+              return row ? `Drop ${row.pair.a.pairing} + ${row.pair.b.pairing} → ${row.swapIns.map((si) => si.pairing).join(" + ")}` : "(no longer available)";
+            })()
+          : (() => {
+              const t = enrichedOpen.find((x) => x.id === entry.id);
+              return t ? `${t.pairing} (${t.dateTok})` : "(no longer available)";
+            })();
+        resolved.push({ ...entry, rank: idx + 1, included: false, label, reason: "Only the top-priority planned pick is shown on the preview — reorder \"Your plan\" below to preview this one instead." });
+        return;
+      }
       if (entry.type === "swap") {
         const row = combinedSwapRowsByKey.get(entry.id);
         if (!row) { resolved.push({ ...entry, rank: idx + 1, included: false, label: "(no longer available)", reason: "This swap no longer qualifies." }); return; }
         const { pair, swapIns } = row;
         const label = `Drop ${pair.a.pairing} + ${pair.b.pairing} → ${swapIns.map((si) => si.pairing).join(" + ")}`;
-        if (usedTripKeys.has(pair.a.key) || usedTripKeys.has(pair.b.key)) {
-          resolved.push({ ...entry, rank: idx + 1, included: false, label, reason: "A trip in this swap is already used by a higher-priority pick." }); return;
-        }
-        const swapInKeys = swapIns.flatMap((si) => tripDateKeys(si));
-        if (swapInKeys.some((k) => claimedSwapInDates.has(k))) {
-          resolved.push({ ...entry, rank: idx + 1, included: false, label, reason: "Its swap-in trip's dates are already claimed by a higher-priority pick." }); return;
-        }
-        usedTripKeys.add(pair.a.key); usedTripKeys.add(pair.b.key);
-        swapInKeys.forEach((k) => claimedSwapInDates.add(k));
-        const freedKeys = [...pair.a.keys, ...pair.b.keys].filter((k) => !swapInKeys.includes(k));
-        freedKeys.forEach((k) => availableDates.add(k));
-        swapInKeys.forEach((k) => availableDates.delete(k));
         includedSwapKeys.add(entry.id);
         resolved.push({ ...entry, rank: idx + 1, included: true, label });
+        topIncluded = true;
       } else {
         const t = enrichedOpen.find((x) => x.id === entry.id);
         if (!t) { resolved.push({ ...entry, rank: idx + 1, included: false, label: "(no longer available)", reason: "This trip no longer qualifies." }); return; }
         const label = `${t.pairing} (${t.dateTok})`;
-        const fits = t.dateKeys.length > 0 && t.dateKeys.every((k) => availableDates.has(k));
-        if (!fits) { resolved.push({ ...entry, rank: idx + 1, included: false, label, reason: "Conflicts with a higher-priority pick, or its swap isn't included above it." }); return; }
-        t.dateKeys.forEach((k) => availableDates.delete(k));
+        const fits = t.dateKeys.length > 0 && t.dateKeys.every((k) => daysOff.has(k));
+        if (!fits) { resolved.push({ ...entry, rank: idx + 1, included: false, label, reason: "This trip no longer qualifies." }); return; }
         includedAddIds.add(entry.id);
         resolved.push({ ...entry, rank: idx + 1, included: true, label });
+        topIncluded = true;
       }
     });
     return { includedAddIds, includedSwapKeys, resolved };
@@ -3470,13 +3481,20 @@ export default function DayOffPayPlanner() {
                         unlockedAdds.length > 0 ? (
                           <div style={{ marginTop: 8 }}>
                             {!swapChecked && <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 6 }}>Check "Planned" above to mark these as planned too.</div>}
+                            {swapChecked && !swapAccepted && <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 6 }}>These days aren't actually free until the swap above is checked "Approved in FLICA" — approving one of these first would land it on a day that isn't really off yet.</div>}
                             <table>
                               <thead><tr><th>Planned</th><th>Approved</th><th>Denied</th><th>Pairing</th><th>Dates</th><th>Credit</th><th>Est. pay</th><th>$ / day off</th></tr></thead>
                               <tbody>
                                 {unlockedAdds.slice().sort((a, b) => (b.perDay || 0) - (a.perDay || 0)).map((t) => {
                                   const isSel = selected.has(t.id);
                                   const isAcc = acceptedAdds.has(t.id);
-                                  const accBlocked = !swapChecked || acceptedConflicts(t);
+                                  // Requires the swap itself to be truly Approved, not merely Planned -- these
+                                  // days aren't actually free on the real schedule until the swap that frees
+                                  // them has gone through for real. Approving one of these against a swap
+                                  // that's only Planned would commit an Add onto a day that isn't really off,
+                                  // silently double-booking it and corrupting every downstream consecutive-day
+                                  // and 60-hour-floor check. This was a real bug once.
+                                  const accBlocked = !swapAccepted || acceptedConflicts(t);
                                   // eligibleSorted trips are already-known-time pot/board candidates the schedule
                                   // itself has no idea about yet (they're not live), so violatesRest can't see a
                                   // conflict against them -- this catches it separately so it can be flagged
