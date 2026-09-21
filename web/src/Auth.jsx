@@ -87,6 +87,12 @@ export default function Auth() {
         )}
       </div>
       {status && <p style={{ marginTop: 14, fontSize: 13, color: "#555" }}>{status}</p>}
+      <p style={{ marginTop: 14, fontSize: 12, color: "#777", lineHeight: 1.5 }}>
+        After you sign up, you'll get a confirmation email from an address with "supabase" in
+        it — that's expected. Email confirmations are still a little rough around the edges: when
+        you click the link, it's normal for the confirmation page itself to fail. Just go back to
+        sdoscheduletool.com and log in with the email and password you just created.
+      </p>
       <p style={{ marginTop: 28, fontSize: 12, color: "#777", lineHeight: 1.5, borderTop: "1px solid #eee", paddingTop: 16 }}>
         Your schedule data is private to your account — it's never shared with or sold to anyone,
         and no other user can see it. This tool is independent and not affiliated with PSA
