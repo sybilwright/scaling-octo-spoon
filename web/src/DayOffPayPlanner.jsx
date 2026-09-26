@@ -593,6 +593,22 @@ function buildDestinations(layover, days) {
   return dests;
 }
 
+// Plain-text hover summary for a trip mentioned in a Swap/Add recommendation -- what days it
+// covers, its overnights, and its credit hours -- shown via a native title attribute wherever a
+// trip's pairing is displayed, so the user doesn't have to go hunt the row down elsewhere to
+// remember what it actually is.
+function tripHoverSummary(pairing, dateKeys, days, overnightsText, creditHours) {
+  const label = (k) => {
+    const [, m, d] = k.split("-").map(Number);
+    return `${pad2(d)}${MONTHS[m - 1]}`;
+  };
+  const keys = dateKeys || [];
+  const range = keys.length ? (keys.length === 1 ? label(keys[0]) : `${label(keys[0])}–${label(keys[keys.length - 1])}`) : "";
+  const dayCount = days || keys.length;
+  const creditText = creditHours != null && !isNaN(creditHours) ? formatHours(creditHours) : "not entered";
+  return `${pairing}${range ? `\n${range}` : ""}${dayCount ? ` (${dayCount} day${dayCount === 1 ? "" : "s"})` : ""}\nOvernights: ${overnightsText && overnightsText.trim() ? overnightsText.trim() : "none"}\nCredit: ${creditText}`;
+}
+
 function renderFlicaCalendar(trips, daysOffCount, year, month, credit, block, blockMayBeInaccurate, vacationDates, protectedDayCodes) {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const byDay = new Map();
@@ -800,6 +816,25 @@ export default function DayOffPayPlanner({ session }) {
 
   const [scheduleText, setScheduleText] = useState("");
   const [scheduleParsed, setScheduleParsed] = useState(null);
+  // One-level-back undo for re-pasting/re-parsing the schedule, Reserve Grid, Opentime pot, or
+  // Trade Board -- each snapshot captures everything that parse action can touch, taken right
+  // before applying the new one, so "Undo" restores exactly what was there a moment ago rather
+  // than trying to re-derive it. Only one step deep on purpose (undoing an undo would just be
+  // redo, which isn't asked for here) -- clicking Undo clears the snapshot so it can't be
+  // replayed twice.
+  const [scheduleUndoSnapshot, setScheduleUndoSnapshot] = useState(null);
+  const [gridUndoSnapshot, setGridUndoSnapshot] = useState(null);
+  const [openUndoSnapshot, setOpenUndoSnapshot] = useState(null);
+  const [tradeUndoSnapshot, setTradeUndoSnapshot] = useState(null);
+  // The textarea's own live text is already overwritten by the time a parse/apply function runs
+  // (typing or pasting updates it immediately, independent of clicking Parse) -- so the snapshot
+  // above can't read "the previous text" off the textarea state at parse time, it's already gone.
+  // These refs separately track whatever text actually produced the currently-applied parse, so
+  // undo can restore exactly that, not whatever happens to be sitting in the box right now.
+  const lastAppliedScheduleTextRef = useRef("");
+  const lastAppliedGridTextRef = useRef("");
+  const lastAppliedOpenTextRef = useRef("");
+  const lastAppliedTradeTextRef = useRef("");
   const [sdoFlags, setSdoFlags] = useState(new Set());
   const [premiumFlags, setPremiumFlags] = useState(new Set());
   const [lockedFlags, setLockedFlags] = useState(new Set());
@@ -1731,6 +1766,11 @@ export default function DayOffPayPlanner({ session }) {
   }
 
   function applyScheduleText(text) {
+    setScheduleUndoSnapshot({
+      scheduleText: lastAppliedScheduleTextRef.current, scheduleParsed, daysOff: new Set(daysOff), baselineCredit,
+      sdoFlags: new Set(sdoFlags), premiumFlags: new Set(premiumFlags),
+    });
+    lastAppliedScheduleTextRef.current = text;
     const result = parseSchedule(text, year, month);
     setScheduleParsed(result);
     // Re-parsing (e.g. pasting a freshly-exported schedule that now shows a trip picked up for
@@ -1772,7 +1812,26 @@ export default function DayOffPayPlanner({ session }) {
     setPremiumFlags(new Set());
   }
   function handleParseSchedule() { applyScheduleText(scheduleText); }
-  function handleParseGrid() { setGridParsed(parseReserveGrid(gridText, year)); }
+  function undoScheduleParse() {
+    if (!scheduleUndoSnapshot) return;
+    const s = scheduleUndoSnapshot;
+    setScheduleText(s.scheduleText); setScheduleParsed(s.scheduleParsed); setDaysOff(s.daysOff);
+    setBaselineCredit(s.baselineCredit); setSdoFlags(s.sdoFlags); setPremiumFlags(s.premiumFlags);
+    lastAppliedScheduleTextRef.current = s.scheduleText;
+    setScheduleUndoSnapshot(null);
+  }
+  function applyGridText(text) {
+    setGridUndoSnapshot({ gridText: lastAppliedGridTextRef.current, gridParsed });
+    lastAppliedGridTextRef.current = text;
+    setGridParsed(parseReserveGrid(text, year));
+  }
+  function handleParseGrid() { applyGridText(gridText); }
+  function undoGridParse() {
+    if (!gridUndoSnapshot) return;
+    setGridText(gridUndoSnapshot.gridText); setGridParsed(gridUndoSnapshot.gridParsed);
+    lastAppliedGridTextRef.current = gridUndoSnapshot.gridText;
+    setGridUndoSnapshot(null);
+  }
   // Only Trade Board's CSV-export format ever parses its own per-trip base (see
   // parseTradeBoardPairingCell) -- everywhere else, a trip keeps whatever base it already
   // carries and otherwise takes the base selected for the paste box it came from, so every
@@ -1780,7 +1839,19 @@ export default function DayOffPayPlanner({ session }) {
   function tagBase(parsed, base) {
     return { ...parsed, trips: parsed.trips.map((t) => ({ ...t, base: t.base || base })) };
   }
-  function handleParseOpen() { setOpenParsed(tagBase(parseBoard(openText, year), openBase)); setSelected(new Set()); }
+  function applyOpenText(text) {
+    setOpenUndoSnapshot({ openText: lastAppliedOpenTextRef.current, openParsed, selected: new Set(selected) });
+    lastAppliedOpenTextRef.current = text;
+    setOpenParsed(tagBase(parseBoard(text, year), openBase));
+    setSelected(new Set());
+  }
+  function handleParseOpen() { applyOpenText(openText); }
+  function undoOpenParse() {
+    if (!openUndoSnapshot) return;
+    setOpenText(openUndoSnapshot.openText); setOpenParsed(openUndoSnapshot.openParsed); setSelected(openUndoSnapshot.selected);
+    lastAppliedOpenTextRef.current = openUndoSnapshot.openText;
+    setOpenUndoSnapshot(null);
+  }
 
   function readTextFile(file, onText) {
     if (!file) return;
@@ -1798,12 +1869,12 @@ export default function DayOffPayPlanner({ session }) {
   }
   function handleGridCSV(e) {
     const file = e.target.files && e.target.files[0];
-    readTextFile(file, (text) => { setGridText(text); setGridParsed(parseReserveGrid(text, year)); });
+    readTextFile(file, (text) => { setGridText(text); applyGridText(text); });
     e.target.value = "";
   }
   function handleOpenCSV(e) {
     const file = e.target.files && e.target.files[0];
-    readTextFile(file, (text) => { setOpenText(text); setOpenParsed(tagBase(parseBoard(text, year), openBase)); setSelected(new Set()); });
+    readTextFile(file, (text) => { setOpenText(text); applyOpenText(text); });
     e.target.value = "";
   }
   function looksLikeFlicaTradeExport(text) {
@@ -1820,11 +1891,14 @@ export default function DayOffPayPlanner({ session }) {
   function handleTradeCSV(e) {
     const file = e.target.files && e.target.files[0];
     readTextFile(file, (text) => {
+      setTradeUndoSnapshot({ tradeText: lastAppliedTradeTextRef.current, tradeParsed });
       if (looksLikeFlicaTradeRawPaste(text) || looksLikeFlicaTradeExport(text)) {
         setTradeParsed(tagBase(parseTradeInput(text), tradeBase));
         setTradeText("");
+        lastAppliedTradeTextRef.current = "";
       } else {
         setTradeText(text);
+        lastAppliedTradeTextRef.current = text;
         setTradeParsed(tagBase(parseBoard(text, year), tradeBase));
       }
     });
@@ -1908,7 +1982,17 @@ export default function DayOffPayPlanner({ session }) {
   function addBlankImageRow() {
     setImageRows((prev) => [...prev, { id: `${Date.now()}-manual`, pairing: "", dateTok: "", days: "1", report: "", arrive: "", creditRaw: "", layover: "", tb: false }]);
   }
-  function handleParseTrade() { setTradeParsed(tagBase(parseTradeInput(tradeText), tradeBase)); }
+  function handleParseTrade() {
+    setTradeUndoSnapshot({ tradeText: lastAppliedTradeTextRef.current, tradeParsed });
+    lastAppliedTradeTextRef.current = tradeText;
+    setTradeParsed(tagBase(parseTradeInput(tradeText), tradeBase));
+  }
+  function undoTradeParse() {
+    if (!tradeUndoSnapshot) return;
+    setTradeText(tradeUndoSnapshot.tradeText); setTradeParsed(tradeUndoSnapshot.tradeParsed);
+    lastAppliedTradeTextRef.current = tradeUndoSnapshot.tradeText;
+    setTradeUndoSnapshot(null);
+  }
 
   function handleAddGridRow() {
     const parsed = parseDateToken(gridDateInput, year);
@@ -1945,9 +2029,16 @@ export default function DayOffPayPlanner({ session }) {
 
   const liveTrips = useMemo(() => {
     if (!scheduleParsed) return [];
+    // A trip approved through this tool (injectedTrips) can end up sharing an identity with a
+    // trip in a freshly re-pasted schedule -- e.g. an Add approved here, then the real FLICA
+    // schedule re-pasted later once it's actually reflected there for real. The freshly-parsed
+    // schedule is ground truth, so it always wins; the injected shadow copy is dropped rather
+    // than shown a second time. This was a real bug once: the same trip listed twice everywhere
+    // liveTrips feeds (Your trips, the calendar, occupiedDateKeys).
+    const freshKeys = new Set(scheduleParsed.trips.map(tripKey));
     return [
       ...scheduleParsed.trips.filter((t) => !consumedTripKeys.has(tripKey(t))),
-      ...injectedTrips,
+      ...injectedTrips.filter((t) => !freshKeys.has(tripKey(t))),
     ];
   }, [scheduleParsed, consumedTripKeys, injectedTrips]);
 
@@ -2903,6 +2994,7 @@ export default function DayOffPayPlanner({ session }) {
         <textarea rows={6} placeholder={scheduleExample} value={scheduleText} onChange={(e) => setScheduleText(e.target.value)} />
         <div style={{ marginTop: 10, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
           <button className="action" onClick={handleParseSchedule}>Parse schedule</button>
+          {scheduleUndoSnapshot && <button className="action small" onClick={undoScheduleParse}>Undo last paste</button>}
           <span style={{ fontSize: 11, color: "var(--text-faint)" }}>or import a CSV:</span>
           <input type="file" accept=".csv,text/csv" onChange={handleScheduleCSV} style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-secondary)" }} />
         </div>
@@ -3116,6 +3208,7 @@ export default function DayOffPayPlanner({ session }) {
         <textarea rows={4} placeholder={gridExample} value={gridText} onChange={(e) => setGridText(e.target.value)} />
         <div style={{ marginTop: 10, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
           <button className="action" onClick={handleParseGrid}>Parse grid</button>
+          {gridUndoSnapshot && <button className="action small" onClick={undoGridParse}>Undo last paste</button>}
           <span style={{ fontSize: 11, color: "var(--text-faint)" }}>or import a CSV:</span>
           <input type="file" accept=".csv,text/csv" onChange={handleGridCSV} style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-secondary)" }} />
           {gridParsed?.error && <span style={{ fontSize: 13, color: "var(--amber-strong)" }}>{gridParsed.error}</span>}
@@ -3174,6 +3267,7 @@ export default function DayOffPayPlanner({ session }) {
         <textarea rows={5} placeholder={boardExample} value={openText} onChange={(e) => setOpenText(e.target.value)} />
         <div style={{ marginTop: 10, marginBottom: 20, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
           <button className="action" onClick={handleParseOpen}>Parse Opentime pot</button>
+          {openUndoSnapshot && <button className="action small" onClick={undoOpenParse}>Undo last paste</button>}
           <span style={{ fontSize: 11, color: "var(--text-faint)" }}>or import a CSV:</span>
           <input type="file" accept=".csv,text/csv" onChange={handleOpenCSV} style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-secondary)" }} />
           {openParsed.error && <span style={{ fontSize: 13, color: "var(--amber-strong)" }}>{openParsed.error}</span>}
@@ -3345,6 +3439,7 @@ export default function DayOffPayPlanner({ session }) {
         <textarea rows={4} placeholder={boardExample} value={tradeText} onChange={(e) => setTradeText(e.target.value)} />
         <div style={{ marginTop: 10, marginBottom: 8, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
           <button className="action" onClick={handleParseTrade}>Parse trade board</button>
+          {tradeUndoSnapshot && <button className="action small" onClick={undoTradeParse}>Undo last paste</button>}
           <span style={{ fontSize: 11, color: "var(--text-faint)" }}>or import a CSV:</span>
           <input type="file" accept=".csv,text/csv" onChange={handleTradeCSV} style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-secondary)" }} />
           {tradeParsed.error && <span style={{ fontSize: 13, color: "var(--amber-strong)" }}>{tradeParsed.error}</span>}
@@ -3415,11 +3510,16 @@ export default function DayOffPayPlanner({ session }) {
                       <td><input type="checkbox" checked={isSel} onChange={() => toggleSelect(t)} /></td>
                       <td><input type="checkbox" checked={isAcc} disabled={accBlocked} onChange={() => toggleAcceptedAdd(t)} /></td>
                       <td><input type="checkbox" checked={false} onChange={() => toggleDeniedAdd(t)} /></td>
-                      <td style={{ color: "var(--text-primary)" }}>
+                      <td style={{ color: "var(--text-primary)" }} title={tripHoverSummary(t.pairing, t.dateKeys, t.days, t.layover, t.creditHours)}>
                         {t.pairing}
                         {swapConflict && (
                           <div style={{ fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
                             Not possible right now — {swapConflict.label} would take over this day if approved.
+                          </div>
+                        )}
+                        {t.usesWanted && (
+                          <div style={{ fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
+                            Uses up a day you marked as wanted off.
                           </div>
                         )}
                       </td>
@@ -3469,7 +3569,7 @@ export default function DayOffPayPlanner({ session }) {
                   const allMissingBlocked = missingOccupied.length === t.missing.length;
                   return (
                     <tr key={t.id}>
-                      <td style={{ color: "var(--text-primary)" }}>
+                      <td style={{ color: "var(--text-primary)" }} title={tripHoverSummary(t.pairing, t.dateKeys, t.days, t.layover, t.creditHours)}>
                         {t.pairing}
                         {swapConflict && (
                           <div style={{ fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
@@ -3479,6 +3579,11 @@ export default function DayOffPayPlanner({ session }) {
                         {missingOccupied.length > 0 && (
                           <div style={{ fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
                             {missingOccupied.length} of the missing day{missingOccupied.length === 1 ? "" : "s"} already {missingOccupied.length === 1 ? "has" : "have"} a trip on it — drop it via a Swap first, this button can't override that.
+                          </div>
+                        )}
+                        {t.usesWanted && (
+                          <div style={{ fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
+                            Uses up a day you marked as wanted off.
                           </div>
                         )}
                       </td>
@@ -3510,7 +3615,7 @@ export default function DayOffPayPlanner({ session }) {
                   onClick={() => toggleSwapGroupCollapsed(groupKey)}
                 >
                   <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--text-muted)", marginBottom: 8 }}>
-                    Swap into <span style={{ color: "var(--text-primary)" }}>{group.swapIn.pairing}</span> ({group.swapIn.dateTok} +{group.swapIn.days - 1}d, {formatHours(group.swapIn.creditHours)} credit) — {group.rows.length} way{group.rows.length === 1 ? "" : "s"} to get there — most potential days freed: {group.rows[0].freedCount}
+                    Swap into <span style={{ color: "var(--text-primary)" }} title={tripHoverSummary(group.swapIn.pairing, group.swapIn.dateKeys, group.swapIn.days, group.swapIn.layover, group.swapIn.creditHours)}>{group.swapIn.pairing}</span> ({group.swapIn.dateTok} +{group.swapIn.days - 1}d, {formatHours(group.swapIn.creditHours)} credit) — {group.rows.length} way{group.rows.length === 1 ? "" : "s"} to get there — most potential days freed: {group.rows[0].freedCount}
                   </div>
                   <button className="action small" onClick={(e) => { e.stopPropagation(); toggleSwapGroupCollapsed(groupKey); }}>{groupCollapsed ? "Show" : "Hide"}</button>
                 </div>
@@ -3535,13 +3640,13 @@ export default function DayOffPayPlanner({ session }) {
                             <input type="checkbox" checked={deniedSwapKeys.has(rowKey)} onChange={() => toggleDeniedSwap(p, rowKey, swapIn)} /> Denied
                           </label>
                           <span style={{ color: "var(--text-primary)", fontFamily: "var(--mono)", fontSize: 13 }}>
-                            Drop {p.a.pairing}{p.a.isPremium && <span className="badge" style={{ background: "var(--badge-red-bg)", color: "var(--amber-strong)", marginLeft: 4 }}>premium</span>}
+                            Drop <span title={tripHoverSummary(p.a.pairing, p.a.keys, p.a.days, (p.a.destinations || []).join(" "), parseCreditToHours(sdoTripCredits.get(p.a.key)))}>{p.a.pairing}</span>{p.a.isPremium && <span className="badge" style={{ background: "var(--badge-red-bg)", color: "var(--amber-strong)", marginLeft: 4 }}>premium</span>}
                             {" + "}
-                            {p.b.pairing}{p.b.isPremium && <span className="badge" style={{ background: "var(--badge-red-bg)", color: "var(--amber-strong)", marginLeft: 4 }}>premium</span>}
+                            <span title={tripHoverSummary(p.b.pairing, p.b.keys, p.b.days, (p.b.destinations || []).join(" "), parseCreditToHours(sdoTripCredits.get(p.b.key)))}>{p.b.pairing}</span>{p.b.isPremium && <span className="badge" style={{ background: "var(--badge-red-bg)", color: "var(--amber-strong)", marginLeft: 4 }}>premium</span>}
                           </span>
                         </div>
                         <div style={{ fontSize: 12, color: p.wantsOverlap ? "var(--amber)" : "var(--text-muted)", fontFamily: "var(--sans)" }}>
-                          Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · includes a wanted day" : ""}
+                          Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · would get rid of a day you wanted off" : ""}
                         </div>
                       </div>
                       {approveWouldViolateFloor && (() => {
@@ -3602,11 +3707,16 @@ export default function DayOffPayPlanner({ session }) {
                                       <td><input type="checkbox" checked={isSel} disabled={!swapChecked} onChange={() => toggleSelect(t)} /></td>
                                       <td><input type="checkbox" checked={isAcc} disabled={accBlocked} onChange={() => toggleAcceptedAdd(t)} /></td>
                                       <td><input type="checkbox" checked={false} onChange={() => toggleDeniedAdd(t)} /></td>
-                                      <td style={{ color: "var(--text-primary)" }}>
+                                      <td style={{ color: "var(--text-primary)" }} title={tripHoverSummary(t.pairing, t.dateKeys, t.days, t.layover, t.creditHours)}>
                                         {t.pairing}
                                         {restConflict && (
                                           <div style={{ fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
                                             Wouldn't currently fit in FLICA — not enough rest against {restConflict.pairing} ({restConflict.dateTok}), also shown as available.
+                                          </div>
+                                        )}
+                                        {t.usesWanted && (
+                                          <div style={{ fontSize: 10, color: "var(--amber-strong)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
+                                            Uses up a day you marked as wanted off.
                                           </div>
                                         )}
                                       </td>
@@ -3655,11 +3765,20 @@ export default function DayOffPayPlanner({ session }) {
                             <input type="checkbox" checked={deniedSwapKeys.has(rowKey)} onChange={() => toggleDeniedSwap(p, rowKey, swapIns)} /> Denied
                           </label>
                           <span style={{ color: "var(--text-primary)", fontFamily: "var(--mono)", fontSize: 13 }}>
-                            Drop {p.a.pairing} + {p.b.pairing} → swap into {swapIns.map((si) => `${si.pairing} (${si.dateTok})`).join(" + ")}
+                            Drop <span title={tripHoverSummary(p.a.pairing, p.a.keys, p.a.days, (p.a.destinations || []).join(" "), parseCreditToHours(sdoTripCredits.get(p.a.key)))}>{p.a.pairing}</span>
+                            {" + "}
+                            <span title={tripHoverSummary(p.b.pairing, p.b.keys, p.b.days, (p.b.destinations || []).join(" "), parseCreditToHours(sdoTripCredits.get(p.b.key)))}>{p.b.pairing}</span>
+                            {" → swap into "}
+                            {swapIns.map((si, i) => (
+                              <span key={si.id}>
+                                {i > 0 && " + "}
+                                <span title={tripHoverSummary(si.pairing, si.dateKeys, si.days, si.layover, si.creditHours)}>{si.pairing} ({si.dateTok})</span>
+                              </span>
+                            ))}
                           </span>
                         </div>
                         <div style={{ fontSize: 12, color: p.wantsOverlap ? "var(--amber)" : "var(--text-muted)", fontFamily: "var(--sans)" }}>
-                          Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · includes a wanted day" : ""}
+                          Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · would get rid of a day you wanted off" : ""}
                         </div>
                       </div>
                       {approveWouldViolateFloor && (() => {
