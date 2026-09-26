@@ -968,6 +968,10 @@ export default function DayOffPayPlanner({ session }) {
   const [theme, setTheme] = useState("light");
   function toggleTheme() { setTheme((t) => (t === "dark" ? "light" : "dark")); }
 
+  // Collapsed by default, like every other reference section -- opened on demand by someone who
+  // wants the walkthrough rather than shown unconditionally to everyone who already knows the tool.
+  const [helpSectionOpen, setHelpSectionOpen] = useState(false);
+
   // Purely reference features: notes and a day-by-day personal planner. Neither is read by any
   // scheduling computation in this tool — they exist only so the user can jot things down alongside
   // their schedule planning.
@@ -1520,6 +1524,7 @@ export default function DayOffPayPlanner({ session }) {
       tbDropRequested: [...tbDropRequested], tbDropAccepted: [...tbDropAccepted],
       tradeDetails: [...tradeDetails.entries()],
       sdoTripCredits: [...sdoTripCredits.entries()],
+      helpSectionOpen,
       notesOpen, notesText, plannerOpen, dayPlans, maxConsecutiveDaysPref, minRestDaysPref, minDaysOffPref,
       tradeSectionOpen, allowSdoTrade, openPotViewerOpen,
       addsReadySectionOpen, addsNearMissSectionOpen, swapsSectionOpen, tbPostSectionOpen, tbAddSectionOpen,
@@ -1626,6 +1631,7 @@ export default function DayOffPayPlanner({ session }) {
       if (d.tbDropAccepted) setTbDropAccepted(new Set(d.tbDropAccepted));
       if (d.tradeDetails) setTradeDetails(new Map(d.tradeDetails));
       if (d.sdoTripCredits) setSdoTripCredits(new Map(d.sdoTripCredits));
+      if (d.helpSectionOpen != null) setHelpSectionOpen(d.helpSectionOpen);
       if (d.notesOpen != null) setNotesOpen(d.notesOpen);
       if (d.notesText != null) setNotesText(d.notesText);
       if (d.plannerOpen != null) setPlannerOpen(d.plannerOpen);
@@ -2751,6 +2757,53 @@ export default function DayOffPayPlanner({ session }) {
         <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16, lineHeight: 1.5 }}>
           Open time picked up on a day already scheduled off pays in addition to your worked credit ("SDO").
           Trade board pickups don't qualify. Everything below is paste or manual entry.
+        </div>
+
+        <div style={{ marginBottom: 20, border: "1px solid var(--border-teal-soft)", borderRadius: 8, padding: "12px 14px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setHelpSectionOpen((v) => !v)}>
+            <div className="h" style={{ marginBottom: 0, color: "var(--teal-bright)" }}>How to use this tool</div>
+            <button className="action small" onClick={(e) => { e.stopPropagation(); setHelpSectionOpen((v) => !v); }}>{helpSectionOpen ? "Hide" : "Show"}</button>
+          </div>
+          {helpSectionOpen && (
+            <div style={{ marginTop: 12, fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Does this tool create privacy or security issues for the company or user?</div>
+              <div style={{ marginBottom: 14 }}>No — this tool has no access to your FLICA/PSA/AA account or account information. Everything you put into the tool is accessed externally by you and then put into the tool as data separate from any database.</div>
+
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>What does this tool do?</div>
+              <div style={{ marginBottom: 14 }}>This scheduling tool helps you create the schedule you want AND maximize your monthly pay by utilizing the company's rules about how trips that go over scheduled days off (SDO) are paid out. It takes your current schedule, the current reserve grid, and the current Opentime pot (or pots, if you want to see out-of-base trip options for higher potential SDO), as well as the Trade Board (optional), and works out all the possible ways you could swap, add, and "drop" trips to make your schedule the most profitable it can be. It isn't connected to your FLICA account at all — every input comes from you copying and pasting your schedule and the other items above. It then gives you recommendations for trip trades that you'd go into FLICA and actually submit the requests there.</div>
+
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>How this tool works</div>
+              <div style={{ marginBottom: 14 }}>Copy your schedule, the Opentime pot(s), the Reserve Grid, and the Trade Board (optional) from FLICA and paste each into its box below. Click "Parse" for each one. Once you've entered your schedule, at least one Opentime pot, and the Reserve Grid, the calendar auto-populates and you'll see recommendations for FLICA schedule changes. Trade Board input is optional — you don't need it for the tool to give you recommendations. Your baseline credit hours auto-populate too — just make sure you have the correct bid month and year selected, and enter your hourly pay if it's different from the tool's default.</div>
+
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Hourly pay calculations</div>
+              <div style={{ marginBottom: 14 }}>The tool calculates your pre-tax monthly pay using the credit hours of your trips and your hourly wage. Per diem is not calculated within the tool.</div>
+
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Planned, Approved, and Denied</div>
+              <div style={{ marginBottom: 6 }}><b>Planned</b> — if you like a recommendation and want to request it in FLICA, check its "Planned" box. You still need to actually go into FLICA and make the request there, since this tool isn't connected to your FLICA account. You can check as many swaps or adds as Planned as you want; the Planned calendar shows what your schedule would look like with your highest-priority pick among Planned rows that reach the same end result (reorder "Your plan" to preview a different one).</div>
+              <div style={{ marginBottom: 6 }}><b>Approved</b> — once your FLICA request is actually approved, mark it "Approved" here too. This updates your Updated calendar and calculates your new credit hours, confirmed bonus hours, confirmed bonus dollar amount, and Actual total for the month. You can also just paste your new, updated schedule instead — either way works. Every time you come back to this tool, re-paste the current Reserve Grid and Opentime pot even if your schedule hasn't changed, since neither updates on its own.</div>
+              <div style={{ marginBottom: 14 }}><b>Denied</b> — if a request gets denied in FLICA, check "Denied" so the tool drops that recommendation from your planned changes. Any of the Planned/Approved/Denied calendars can be hidden and shown again with their own checkbox.</div>
+
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Schedule preferences</div>
+              <div style={{ marginBottom: 14 }}>You can set specific days of the week you want off, weekends off, specific dates off, and trips that won't start before or end after certain times — every recommendation below only matches what you've set. Leave any of these blank if you don't have a preference there.</div>
+
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Dark mode / Light mode</div>
+              <div style={{ marginBottom: 14 }}>Use the "Light mode" / "Dark mode" button in the top right to switch.</div>
+
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>What if my pasted schedule already has SDO and/or premium trips on it?</div>
+              <div style={{ marginBottom: 14 }}>As soon as you paste your schedule, your trips list appears in order with an SDO checkbox and a Premium checkbox on each. Check SDO if a trip already qualifies as one (this changes how the tool calculates it), and check Premium if it should be calculated at 150% pay. For either one, you also need to manually enter that trip's credit hours — found under TCRD inside the pairing in FLICA — typed the same way FLICA shows it (e.g. 4 hours 30 minutes is "0430", 19 hours 20 minutes is "1920").</div>
+
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Where can I see all the changes I've made, and undo one by mistake?</div>
+              <div style={{ marginBottom: 14 }}>The change log at the bottom of the tool lists every confirmed ("Approved") change, each with its own Revert button.</div>
+
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Out-of-base trips</div>
+              <div style={{ marginBottom: 14 }}>If you're open to working out of any base to get the most SDO possible, this tool can help — below the required Opentime pot box there are four additional collapsible boxes for pasting other bases' Opentime pots, so recommendations can draw on up to all five bases' trips at once. The one limitation: you can only paste your own base's Reserve Grid.</div>
+
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Limitations</div>
+              <div style={{ marginBottom: 14 }}>This tool shows you every potential change you could make in FLICA, but there's no guarantee any specific request gets approved — plenty get denied, that's just the reality of changing a schedule. Because of that, it helps to mark every swap that would manufacture the same days off as Planned and submit all of those requests in FLICA at once, so you've got a better shot at getting at least one approved. It's also important to remember that the Reserve Grid drives what's actually possible and it changes constantly — since this tool isn't connected to FLICA, the grid, Opentime pot, and Trade Board never update on their own, so re-paste the current versions of each whenever you come back for fresh recommendations. Your most recently saved schedule stays in the tool, so you won't need to keep re-pasting it as long as you've marked every approved FLICA change as "Approved" here.</div>
+
+              <div>Questions or concerns? Email <a href="mailto:adminsdoscheduletool@gmail.com" style={{ color: "var(--teal-bright)" }}>adminsdoscheduletool@gmail.com</a>.</div>
+            </div>
+          )}
         </div>
 
         <div style={{ marginBottom: 20 }}>
