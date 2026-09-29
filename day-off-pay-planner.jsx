@@ -1031,8 +1031,11 @@ export default function DayOffPayPlanner() {
   const [consumedTripKeys, setConsumedTripKeys] = useState(new Set());
   const [plannedOrder, setPlannedOrder] = useState([]); // [{type:'add'|'swap', id}] in priority order
 
-  function addToPlannedOrder(type, id) {
-    setPlannedOrder((prev) => (prev.some((e) => e.type === type && e.id === id) ? prev : [...prev, { type, id }]));
+  // comboId (add-only) ties two or more entries together as an explicitly-verified, genuinely
+  // compatible bundle -- see planCombinedAdd/the projection's includedComboIds handling below --
+  // never set for a plain single-trip "Planned" checkbox click.
+  function addToPlannedOrder(type, id, comboId) {
+    setPlannedOrder((prev) => (prev.some((e) => e.type === type && e.id === id) ? prev : [...prev, comboId ? { type, id, comboId } : { type, id }]));
   }
   function removeFromPlannedOrder(type, id) {
     setPlannedOrder((prev) => prev.filter((e) => !(e.type === type && e.id === id)));
@@ -1346,6 +1349,7 @@ export default function DayOffPayPlanner() {
   const [tradeSectionOpen, setTradeSectionOpen] = useState(false);
   const [openPotViewerOpen, setOpenPotViewerOpen] = useState(false);
   const [addsReadySectionOpen, setAddsReadySectionOpen] = useState(true);
+  const [combinedAddsSectionOpen, setCombinedAddsSectionOpen] = useState(true);
   const [addsNearMissSectionOpen, setAddsNearMissSectionOpen] = useState(false);
   const [swapsSectionOpen, setSwapsSectionOpen] = useState(true);
   const [tbPostSectionOpen, setTbPostSectionOpen] = useState(true);
@@ -1527,7 +1531,7 @@ export default function DayOffPayPlanner() {
       helpSectionOpen,
       notesOpen, notesText, plannerOpen, dayPlans, maxConsecutiveDaysPref, minRestDaysPref, minDaysOffPref,
       tradeSectionOpen, allowSdoTrade, openPotViewerOpen,
-      addsReadySectionOpen, addsNearMissSectionOpen, swapsSectionOpen, tbPostSectionOpen, tbAddSectionOpen,
+      addsReadySectionOpen, combinedAddsSectionOpen, addsNearMissSectionOpen, swapsSectionOpen, tbPostSectionOpen, tbAddSectionOpen,
       calVisible, theme,
     };
   }
@@ -1606,6 +1610,7 @@ export default function DayOffPayPlanner() {
       if (d.tradeSectionOpen != null) setTradeSectionOpen(d.tradeSectionOpen);
       if (d.openPotViewerOpen != null) setOpenPotViewerOpen(d.openPotViewerOpen);
       if (d.addsReadySectionOpen != null) setAddsReadySectionOpen(d.addsReadySectionOpen);
+      if (d.combinedAddsSectionOpen != null) setCombinedAddsSectionOpen(d.combinedAddsSectionOpen);
       if (d.addsNearMissSectionOpen != null) setAddsNearMissSectionOpen(d.addsNearMissSectionOpen);
       if (d.swapsSectionOpen != null) setSwapsSectionOpen(d.swapsSectionOpen);
       if (d.tbPostSectionOpen != null) setTbPostSectionOpen(d.tbPostSectionOpen);
@@ -2121,6 +2126,50 @@ export default function DayOffPayPlanner() {
   const minDaysOffBlockedCount = enrichedOpen.filter((t) => t.eligible && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && t.violatesMinDaysOff).length;
   const autoFlaggedTB = enrichedOpen.filter((t) => t.autoTB);
 
+  // Combined Adds: two already-individually-eligible Opentime pot trips that can genuinely be
+  // picked up TOGETHER, in addition to the single-trip Adds listed above. Each half of a combo
+  // already lands entirely on existing days off on its own -- what's checked here is only whether
+  // taking BOTH at once still clears everything a normal Add has to clear alone: no date shared
+  // between the two, the combined max-consecutive-days count, the combined minimum-rest-gap floor,
+  // and (if they land back to back) the 10h minimum rest between them, via the same
+  // findAdjacentRestConflict helper already used to flag this for a swap's nested "possible adds".
+  // Capped at two trips per combo, same as a multi-trip swap-in -- purely for combinatorial and UI
+  // simplicity, not a hard rule; a third compatible trip just shows up in a second combo alongside
+  // one of the first two.
+  function combinedAddConflict(t1, t2) {
+    if (t1.dateKeys.some((k) => t2.dateKeys.includes(k))) return true;
+    const combinedKeys = [...t1.dateKeys, ...t2.dateKeys];
+    if (longestConsecutiveRun(new Set([...occupiedDateKeys, ...combinedKeys])) > effectiveMaxConsecutive) return true;
+    if (violatesMinRestGap(occupiedDateKeys, combinedKeys, effectiveMinRestDays)) return true;
+    return !!findAdjacentRestConflict(t1, [t2]);
+  }
+  const combinedAddOptions = useMemo(() => {
+    const results = [];
+    for (let i = 0; i < eligibleSorted.length; i++) {
+      for (let j = i + 1; j < eligibleSorted.length; j++) {
+        const t1 = eligibleSorted[i], t2 = eligibleSorted[j];
+        if (combinedAddConflict(t1, t2)) continue;
+        results.push({
+          id: `${t1.id}+${t2.id}`, trips: [t1, t2],
+          totalCreditHours: (t1.creditHours || 0) + (t2.creditHours || 0),
+          totalPay: (t1.pay || 0) + (t2.pay || 0),
+        });
+      }
+    }
+    return results.sort((a, b) => b.totalPay - a.totalPay);
+  }, [eligibleSorted, occupiedDateKeys, effectiveMaxConsecutive, effectiveMinRestDays]);
+
+  function planCombinedAdd(combo) {
+    combo.trips.forEach((t) => {
+      if (selected.has(t.id)) return;
+      setSelected((prev) => new Set(prev).add(t.id));
+      addToPlannedOrder("add", t.id, combo.id);
+    });
+  }
+  function approveCombinedAdd(combo) {
+    combo.trips.forEach((t) => { if (!acceptedAdds.has(t.id)) toggleAcceptedAdd(t); });
+  }
+
   const allTradeTrips = useMemo(() => {
     const extras = extraTradeBoards.flatMap((b, bi) => b.parsed.trips.map((t) => ({ ...t, id: `xtb${bi}-${t.id}` })));
     return [...tradeParsed.trips, ...extras];
@@ -2489,9 +2538,20 @@ export default function DayOffPayPlanner() {
     const includedSwapKeys = new Set();
     const resolved = [];
     let topIncluded = false;
+    // Two Adds checked independently, one at a time, still only ever show the single top-priority
+    // pick -- they're very often alternatives being compared, exactly like the swap case below.
+    // The ONLY thing that bypasses that is a comboId shared with something already included: set
+    // solely by "Plan both" on a Combined Adds row (combinedAddOptions above), i.e. a bundle this
+    // tool has already verified is genuinely compatible, not a coincidence of check order. Even a
+    // combo sibling is still re-checked for an actual conflict against everything included so far
+    // (includedOccupied) before being let through, in case the schedule moved since the combo was
+    // computed.
+    const includedComboIds = new Set();
+    const includedOccupied = new Set(occupiedDateKeys);
 
     activeOrder.forEach((entry, idx) => {
-      if (topIncluded) {
+      const partOfIncludedCombo = topIncluded && entry.type === "add" && entry.comboId && includedComboIds.has(entry.comboId);
+      if (topIncluded && !partOfIncludedCombo) {
         const label = entry.type === "swap"
           ? (() => {
               const row = combinedSwapRowsByKey.get(entry.id);
@@ -2518,13 +2578,24 @@ export default function DayOffPayPlanner() {
         const label = `${t.pairing} (${t.dateTok})`;
         const fits = t.dateKeys.length > 0 && t.dateKeys.every((k) => daysOff.has(k));
         if (!fits) { resolved.push({ ...entry, rank: idx + 1, included: false, label, reason: "This trip no longer qualifies." }); return; }
+        if (partOfIncludedCombo) {
+          const conflicts = t.dateKeys.some((k) => includedOccupied.has(k))
+            || longestConsecutiveRun(new Set([...includedOccupied, ...t.dateKeys])) > effectiveMaxConsecutive
+            || violatesMinRestGap(includedOccupied, t.dateKeys, effectiveMinRestDays);
+          if (conflicts) {
+            resolved.push({ ...entry, rank: idx + 1, included: false, label, reason: "Conflicts with a higher-priority planned pick above — reorder \"Your plan\" below to preview this one instead." });
+            return;
+          }
+        }
+        t.dateKeys.forEach((k) => includedOccupied.add(k));
         includedAddIds.add(entry.id);
+        if (entry.comboId) includedComboIds.add(entry.comboId);
         resolved.push({ ...entry, rank: idx + 1, included: true, label });
         topIncluded = true;
       }
     });
     return { includedAddIds, includedSwapKeys, resolved };
-  }, [plannedOrder, combinedSwapRowsByKey, enrichedOpen, daysOff, acceptedAdds, acceptedSwaps, deniedAddIds, deniedSwapKeys]);
+  }, [plannedOrder, combinedSwapRowsByKey, enrichedOpen, daysOff, acceptedAdds, acceptedSwaps, deniedAddIds, deniedSwapKeys, occupiedDateKeys, effectiveMaxConsecutive, effectiveMinRestDays]);
 
   const selectedTrips = enrichedOpen.filter((t) => selected.has(t.id));
   const projectedTrips = enrichedOpen.filter((t) => projection.includedAddIds.has(t.id));
@@ -3356,6 +3427,44 @@ export default function DayOffPayPlanner() {
                 })}
               </tbody>
             </table>}
+          </>
+        )}
+
+        {combinedAddOptions.length > 0 && (
+          <>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setCombinedAddsSectionOpen((v) => !v)}>
+              <div className="h" style={{ marginBottom: 0 }}>Combined Adds — pick up more than one at once</div>
+              <button className="action small" onClick={(e) => { e.stopPropagation(); setCombinedAddsSectionOpen((v) => !v); }}>{combinedAddsSectionOpen ? "Hide" : "Show"}</button>
+            </div>
+            {combinedAddsSectionOpen && (
+              <>
+                <div className="hint" style={{ marginTop: 6 }}>Pairs of the ready-now Adds above that don't conflict with each other or your schedule, so you can request both together instead of one at a time. Still two separate FLICA requests — this just confirms they can coexist.</div>
+                <table style={{ marginBottom: 24 }}>
+                  <thead><tr><th></th><th>Trip 1</th><th>Trip 2</th><th>Combined credit</th><th>Combined pay</th><th></th></tr></thead>
+                  <tbody>
+                    {combinedAddOptions.map((combo) => {
+                      const [t1, t2] = combo.trips;
+                      const bothPlanned = selected.has(t1.id) && selected.has(t2.id);
+                      const bothApproved = acceptedAdds.has(t1.id) && acceptedAdds.has(t2.id);
+                      const anyBlocked = acceptedConflicts(t1) || acceptedConflicts(t2);
+                      return (
+                        <tr key={combo.id}>
+                          <td style={{ fontFamily: "var(--sans)", fontSize: 11, color: "var(--text-faint)" }}>{t1.days}+{t2.days}d</td>
+                          <td style={{ color: "var(--text-primary)" }} title={tripHoverSummary(t1.pairing, t1.dateKeys, t1.days, t1.layover, t1.creditHours)}>{t1.pairing} ({t1.dateTok})</td>
+                          <td style={{ color: "var(--text-primary)" }} title={tripHoverSummary(t2.pairing, t2.dateKeys, t2.days, t2.layover, t2.creditHours)}>{t2.pairing} ({t2.dateTok})</td>
+                          <td>{formatHours(combo.totalCreditHours)}</td>
+                          <td style={{ color: "var(--teal-bright)" }}>{formatMoney(combo.totalPay)}</td>
+                          <td style={{ display: "flex", gap: 6 }}>
+                            <button className="action small" onClick={() => planCombinedAdd(combo)} disabled={bothPlanned}>{bothPlanned ? "Planned" : "Plan both"}</button>
+                            <button className="action small" onClick={() => approveCombinedAdd(combo)} disabled={bothApproved || anyBlocked}>{bothApproved ? "Approved" : "Approve both"}</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </>
+            )}
           </>
         )}
 
