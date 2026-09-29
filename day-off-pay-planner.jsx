@@ -3438,7 +3438,7 @@ export default function DayOffPayPlanner() {
             </div>
             {combinedAddsSectionOpen && (
               <>
-                <div className="hint" style={{ marginTop: 6 }}>Pairs of the ready-now Adds above that don't conflict with each other or your schedule, so you can request both together instead of one at a time. Still two separate FLICA requests — this just confirms they can coexist.</div>
+                <div className="hint" style={{ marginTop: 6 }}>Pairs of the ready-now Adds above that don't conflict with each other or your schedule — FLICA lets you submit both trips together in a single Add request instead of two separate ones.</div>
                 <table style={{ marginBottom: 24 }}>
                   <thead><tr><th></th><th>Trip 1</th><th>Trip 2</th><th>Combined credit</th><th>Combined pay</th><th></th></tr></thead>
                   <tbody>
