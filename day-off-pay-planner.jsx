@@ -349,9 +349,11 @@ function parseBoard(text, year) {
 const MAX_CONSECUTIVE_WORK_DAYS = 6;
 const MIN_REST_HOURS = 10;
 const GUARANTEE_HOURS = 75;
-// Premium pay is 150% -- i.e. the normal worked credit (already counted once in baseline) plus
-// this extra half again, specifically for the flagged day(s).
-const PREMIUM_BONUS_FRACTION = 0.5;
+// Premium pay is 200% -- i.e. the normal worked credit (already counted once in baseline) plus
+// this extra full amount again, specifically for the flagged day(s).
+const PREMIUM_BONUS_FRACTION = 1.0;
+// Critical Coverage/Holiday pays 150% -- same shape as Premium, one extra half on top.
+const CRITICAL_BONUS_FRACTION = 0.5;
 
 function adjacentDateKey(key, deltaDays) {
   const [y, m, d] = key.split("-").map(Number);
@@ -863,6 +865,14 @@ export default function DayOffPayPlanner() {
   function setPremiumDayCredit(dayKeyStr, value) {
     setPremiumDayCredits((prev) => { const n = new Map(prev); if (value === "") n.delete(dayKeyStr); else n.set(dayKeyStr, value); return n; });
   }
+  const [criticalFlags, setCriticalFlags] = useState(new Set());
+  // Same per-day-credit shape as premiumDayCredits above, for the Critical Coverage/Holiday
+  // column -- a separate flag set and credit map since a day can be flagged Premium, Critical/
+  // Holiday, both, or neither independently.
+  const [criticalDayCredits, setCriticalDayCredits] = useState(new Map());
+  function setCriticalDayCredit(dayKeyStr, value) {
+    setCriticalDayCredits((prev) => { const n = new Map(prev); if (value === "") n.delete(dayKeyStr); else n.set(dayKeyStr, value); return n; });
+  }
 
   const [gridText, setGridText] = useState("");
   const [gridParsed, setGridParsed] = useState(null);
@@ -1012,6 +1022,24 @@ export default function DayOffPayPlanner() {
   // off one at a time would, since a trip's credit is never split evenly across its days.
   function toggleWholeTripPremium(trip) {
     setPremiumFlags((prev) => {
+      const n = new Set(prev);
+      const allFlagged = trip.keys.every((k) => n.has(k));
+      if (allFlagged) trip.keys.forEach((k) => n.delete(k));
+      else trip.keys.forEach((k) => n.add(k));
+      return n;
+    });
+  }
+  // Critical Coverage/Holiday -- identical per-day-flag/whole-trip-shortcut shape as Premium above,
+  // just its own independent flag set so a day can carry Premium, Critical/Holiday, both, or neither.
+  const [expandedCriticalTrips, setExpandedCriticalTrips] = useState(new Set());
+  function toggleCriticalTripExpanded(key) {
+    setExpandedCriticalTrips((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  }
+  function toggleCriticalDay(dateKeyStr) {
+    setCriticalFlags((prev) => { const n = new Set(prev); n.has(dateKeyStr) ? n.delete(dateKeyStr) : n.add(dateKeyStr); return n; });
+  }
+  function toggleWholeTripCritical(trip) {
+    setCriticalFlags((prev) => {
       const n = new Set(prev);
       const allFlagged = trip.keys.every((k) => n.has(k));
       if (allFlagged) trip.keys.forEach((k) => n.delete(k));
@@ -1270,6 +1298,8 @@ export default function DayOffPayPlanner() {
     setSdoFlags(new Set());
     setPremiumFlags(new Set());
     setPremiumDayCredits(new Map());
+    setCriticalFlags(new Set());
+    setCriticalDayCredits(new Map());
     setLockedFlags(new Set());
     setSdoTripCredits(new Map());
 
@@ -1304,6 +1334,7 @@ export default function DayOffPayPlanner() {
     setShowAddsFor(new Set());
     setExpandedSwapGroups(new Set());
     setExpandedPremiumTrips(new Set());
+    setExpandedCriticalTrips(new Set());
     setSelectedSwaps(new Set());
     setAcceptedAdds(new Set());
     setAcceptedSwaps(new Set());
@@ -1687,7 +1718,7 @@ export default function DayOffPayPlanner() {
       wantedText, wantedWeekdays: [...wantedWeekdays], wantedWorkText, wantedWorkWeekdays: [...wantedWorkWeekdays], minReport, maxArrive, applyTimePref, homeBase,
       scheduleText,
       scheduleParsed: scheduleParsed ? { trips: scheduleParsed.trips, daysOff: [...scheduleParsed.daysOff], vacationDays: [...scheduleParsed.vacationDays], protectedDayCodes: [...(scheduleParsed.protectedDayCodes || new Map()).entries()], summary: scheduleParsed.summary } : null,
-      sdoFlags: [...sdoFlags], premiumFlags: [...premiumFlags], premiumDayCredits: [...premiumDayCredits.entries()], lockedFlags: [...lockedFlags],
+      sdoFlags: [...sdoFlags], premiumFlags: [...premiumFlags], premiumDayCredits: [...premiumDayCredits.entries()], criticalFlags: [...criticalFlags], criticalDayCredits: [...criticalDayCredits.entries()], lockedFlags: [...lockedFlags],
       gridText, manualGridRows, gridParsed: gridParsed ? { ...gridParsed, grid: [...gridParsed.grid.entries()] } : null,
       openText, openBase, openParsed, imageRows,
       extraBoards: extraBoards.map((b) => ({ ...b, imgPreview: null, imgBase64: null, imgError: null, imgLoading: false })),
@@ -1747,6 +1778,8 @@ export default function DayOffPayPlanner() {
       if (d.sdoFlags) setSdoFlags(new Set(d.sdoFlags));
       if (d.premiumFlags) setPremiumFlags(new Set(d.premiumFlags));
       if (d.premiumDayCredits) setPremiumDayCredits(new Map(d.premiumDayCredits));
+      if (d.criticalFlags) setCriticalFlags(new Set(d.criticalFlags));
+      if (d.criticalDayCredits) setCriticalDayCredits(new Map(d.criticalDayCredits));
       if (d.lockedFlags) setLockedFlags(new Set(d.lockedFlags));
       if (d.gridText != null) setGridText(d.gridText);
       if (d.gridParsed) setGridParsed({ ...d.gridParsed, grid: new Map(d.gridParsed.grid) });
@@ -1873,6 +1906,7 @@ export default function DayOffPayPlanner() {
     setScheduleUndoSnapshot({
       scheduleText: lastAppliedScheduleTextRef.current, scheduleParsed, daysOff: new Set(daysOff), baselineCredit,
       sdoFlags: new Set(sdoFlags), premiumFlags: new Set(premiumFlags), premiumDayCredits: new Map(premiumDayCredits),
+      criticalFlags: new Set(criticalFlags), criticalDayCredits: new Map(criticalDayCredits),
     });
     lastAppliedScheduleTextRef.current = text;
     const result = parseSchedule(text, year, month);
@@ -1915,6 +1949,8 @@ export default function DayOffPayPlanner() {
     });
     setPremiumFlags(new Set());
     setPremiumDayCredits(new Map());
+    setCriticalFlags(new Set());
+    setCriticalDayCredits(new Map());
   }
   function handleParseSchedule() { applyScheduleText(scheduleText); }
   function undoScheduleParse() {
@@ -1922,6 +1958,7 @@ export default function DayOffPayPlanner() {
     const s = scheduleUndoSnapshot;
     setScheduleText(s.scheduleText); setScheduleParsed(s.scheduleParsed); setDaysOff(s.daysOff);
     setBaselineCredit(s.baselineCredit); setSdoFlags(s.sdoFlags); setPremiumFlags(s.premiumFlags); setPremiumDayCredits(s.premiumDayCredits || new Map());
+    setCriticalFlags(s.criticalFlags || new Set()); setCriticalDayCredits(s.criticalDayCredits || new Map());
     lastAppliedScheduleTextRef.current = s.scheduleText;
     setScheduleUndoSnapshot(null);
   }
@@ -2255,6 +2292,8 @@ export default function DayOffPayPlanner() {
       const isSdo = sdoFlags.has(key);
       const premiumDayKeys = keys.filter((k) => premiumFlags.has(k));
       const isPremium = premiumDayKeys.length > 0;
+      const criticalDayKeys = keys.filter((k) => criticalFlags.has(k));
+      const isCritical = criticalDayKeys.length > 0;
       const isLocked = lockedFlags.has(key);
       const wantsOverlap = keys.some((k) => wantedOff.has(k));
       // The mirror case: this trip covers at least one day the user specifically wants to KEEP
@@ -2263,9 +2302,9 @@ export default function DayOffPayPlanner() {
       // as every other preference in this tool (recommendations respect it, nothing is forced).
       const wantsKeepOverlap = keys.some((k) => wantedToWork.has(k));
       const isInjected = injectedKeys.has(key);
-      return { ...t, keys, droppable: !blocker && !isSdo && !isLocked, gridBlocked: !!blocker, blocker, key, isSdo, isPremium, premiumDayKeys, isLocked, wantsOverlap, wantsKeepOverlap, isInjected };
+      return { ...t, keys, droppable: !blocker && !isSdo && !isLocked, gridBlocked: !!blocker, blocker, key, isSdo, isPremium, premiumDayKeys, isCritical, criticalDayKeys, isLocked, wantsOverlap, wantsKeepOverlap, isInjected };
     });
-  }, [scheduleParsed, liveTrips, injectedTrips, combinedGrid, sdoFlags, premiumFlags, lockedFlags, wantedOff, wantedToWork, year, month]);
+  }, [scheduleParsed, liveTrips, injectedTrips, combinedGrid, sdoFlags, premiumFlags, criticalFlags, lockedFlags, wantedOff, wantedToWork, year, month]);
 
   const originalCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
@@ -2723,8 +2762,8 @@ export default function DayOffPayPlanner() {
   }
 
   // A Trade Board post isn't a net removal of coverage — whoever picks it up takes over the
-  // exact same days, so the Reserve Grid buffer is never actually affected. Only SDO/Premium matter here.
-  const tradePostCandidates = droppableTrips.filter((t) => !t.isSdo && !t.isPremium && !t.isLocked);
+  // exact same days, so the Reserve Grid buffer is never actually affected. Only SDO/Premium/Critical matter here.
+  const tradePostCandidates = droppableTrips.filter((t) => !t.isSdo && !t.isPremium && !t.isCritical && !t.isLocked);
   const sdoExcludedCount = droppableTrips.filter((t) => t.isSdo).length;
   const gridBlockedCount = droppableTrips.filter((t) => !t.droppable && !t.isSdo && t.gridBlocked).length;
   const gridUnknownCount = droppableTrips.filter((t) => !t.droppable && !t.isSdo && !t.gridBlocked).length;
@@ -2916,8 +2955,8 @@ export default function DayOffPayPlanner() {
   const confirmedWorkedHours = confirmedBonusHours > 0 && baselineHours >= GUARANTEE_HOURS ? GUARANTEE_HOURS : baselineHours;
   const totalConfirmedCreditHours = confirmedWorkedHours + confirmedBonusHours;
 
-  // Premium pay (150%): baseline already counts a flagged day's worked credit once at the normal
-  // rate, so this only ever needs to add the extra PREMIUM_BONUS_FRACTION (50%) on top, per
+  // Premium pay (200%): baseline already counts a flagged day's worked credit once at the normal
+  // rate, so this only ever needs to add the extra PREMIUM_BONUS_FRACTION (100%) on top, per
   // flagged day. A trip's total credit is never split evenly across its days -- a duty day's own
   // block/credit time varies day to day -- so a PARTIALLY-flagged multi-day trip's own share has
   // to come from premiumDayCredits, entered by hand for each specific flagged date, never averaged
@@ -2952,7 +2991,30 @@ export default function DayOffPayPlanner() {
   }, [droppableTrips, sdoTripCredits, premiumDayCredits]);
   const premiumBonusPay = premiumBonusHours * hourlyRate;
 
-  const actualTotal = totalConfirmedCreditHours * hourlyRate + premiumBonusPay;
+  // Critical Coverage/Holiday pay (150%): identical shape and rationale to Premium above --
+  // same "whole trip/1-day reuses entered trip credit, partial flagging needs per-day entry"
+  // rule, same independence from the SDO guarantee-floor substitution, just its own flag/credit
+  // map and CRITICAL_BONUS_FRACTION (50%) since a day's Premium and Critical/Holiday status are
+  // tracked, and can be flagged, independently of each other.
+  const criticalBonusHours = useMemo(() => {
+    let sum = 0;
+    droppableTrips.forEach((t) => {
+      if (!t.criticalDayKeys || !t.criticalDayKeys.length) return;
+      if (t.days === 1 || t.criticalDayKeys.length === t.days) {
+        const h = parseCreditToHours(sdoTripCredits.get(t.key));
+        if (h != null) sum += h * CRITICAL_BONUS_FRACTION;
+        return;
+      }
+      t.criticalDayKeys.forEach((k) => {
+        const h = parseCreditToHours(criticalDayCredits.get(k));
+        if (h != null) sum += h * CRITICAL_BONUS_FRACTION;
+      });
+    });
+    return sum;
+  }, [droppableTrips, sdoTripCredits, criticalDayCredits]);
+  const criticalBonusPay = criticalBonusHours * hourlyRate;
+
+  const actualTotal = totalConfirmedCreditHours * hourlyRate + premiumBonusPay + criticalBonusPay;
   const plannedTotal = actualTotal + totalCreditHours * hourlyRate + totalBonusPay;
 
   return (
@@ -3039,8 +3101,8 @@ export default function DayOffPayPlanner() {
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Dark mode / Light mode</div>
               <div style={{ marginBottom: 14 }}>Use the "Light mode" / "Dark mode" button in the top right to switch.</div>
 
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>What if my pasted schedule already has SDO and/or premium trips on it?</div>
-              <div style={{ marginBottom: 14 }}>As soon as you paste your schedule, your trips list appears in order with an SDO checkbox and a Premium checkbox on each — Premium is per day, so a multi-day trip shows "Show" to reveal one checkbox per date instead of one for the whole trip, since often only specific calendar days on a trip actually carry premium pay. If the whole trip actually is premium, check "Whole trip" right next to "Show" instead of each day individually — it flags every day at once and calculates using the trip's own credit hours entered next to it, no per-day entry needed. Check SDO if a trip already qualifies as one (this changes how the tool calculates it), and flag Premium on whichever days need it — it calculates those days at 150% pay (the normal worked credit plus half again) and also keeps swap/Trade Board suggestions from casually giving those days away. Credit hours — found under TCRD inside the pairing in FLICA, typed the same way FLICA shows it (e.g. 4 hours 30 minutes is "0430") — are what let either one actually add to your totals: SDO uses the trip's overall credit hours entered next to it, and so does Premium once every day of a trip is flagged (via "Whole trip" or by hand, same result either way) — only a trip with just *some* days flagged needs each of those specific days' own credit hours entered separately once expanded, since a trip's total isn't split evenly across its days and there's no way to know just that day's share otherwise. A flagged day/trip with no credit entered is still protected, it just doesn't add to the math yet.</div>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>What if my pasted schedule already has SDO, premium, and/or critical/holiday trips on it?</div>
+              <div style={{ marginBottom: 14 }}>As soon as you paste your schedule, your trips list appears in order with an SDO checkbox, a Premium checkbox, and a Critical/Holiday checkbox on each — Premium and Critical/Holiday are each per day, so a multi-day trip shows "Show" to reveal one checkbox per date instead of one for the whole trip, since often only specific calendar days on a trip actually carry that pay. If the whole trip actually qualifies, check "Whole trip" right next to "Show" instead of each day individually — it flags every day at once and calculates using the trip's own credit hours entered next to it, no per-day entry needed. Check SDO if a trip already qualifies as one (this changes how the tool calculates it), and flag Premium or Critical/Holiday on whichever days need it — Premium calculates those days at 200% pay (the normal worked credit plus a full extra credit again) and Critical/Holiday at 150% (the normal worked credit plus half again); a day can carry either, both, or neither independently. Either flag also keeps swap/Trade Board suggestions from casually giving those days away. Credit hours — found under TCRD inside the pairing in FLICA, typed the same way FLICA shows it (e.g. 4 hours 30 minutes is "0430") — are what let any of them actually add to your totals: SDO uses the trip's overall credit hours entered next to it, and so do Premium and Critical/Holiday once every day of a trip is flagged (via "Whole trip" or by hand, same result either way) — only a trip with just *some* days flagged needs each of those specific days' own credit hours entered separately once expanded, since a trip's total isn't split evenly across its days and there's no way to know just that day's share otherwise. A flagged day/trip with no credit entered is still protected, it just doesn't add to the math yet.</div>
 
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Where can I see all the changes I've made, and undo one by mistake?</div>
               <div style={{ marginBottom: 14 }}>The change log at the bottom of the tool lists every confirmed ("Approved") change, each with its own Revert button.</div>
@@ -3275,7 +3337,7 @@ export default function DayOffPayPlanner() {
           <div style={{ marginBottom: 24 }}>
             <div className="h">Your trips — flag and check droppability</div>
             <table>
-              <thead><tr><th>Pairing</th><th>Dates</th><th>SDO</th><th>Credit hrs</th><th>Premium</th><th>Lock</th><th>Status</th><th></th></tr></thead>
+              <thead><tr><th>Pairing</th><th>Dates</th><th>SDO</th><th>Credit hrs</th><th>Premium</th><th>Critical/Holiday</th><th>Lock</th><th>Status</th><th></th></tr></thead>
               <tbody>
                 {droppableTrips.map((t, i) => (
                   <tr key={i}>
@@ -3328,6 +3390,38 @@ export default function DayOffPayPlanner() {
                         </div>
                       )}
                     </td>
+                    <td>
+                      {t.days === 1 ? (
+                        <input type="checkbox" checked={t.isCritical} onChange={() => toggleCriticalDay(t.keys[0])} />
+                      ) : (
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 11, color: t.isCritical ? "var(--amber-strong)" : "var(--text-faint)" }}>{t.criticalDayKeys.length}/{t.days} days</span>
+                            <label className="chk" style={{ marginRight: 0 }}>
+                              <input type="checkbox" checked={t.criticalDayKeys.length === t.days} onChange={() => toggleWholeTripCritical(t)} /> Whole trip
+                            </label>
+                            <button className="action small" onClick={() => toggleCriticalTripExpanded(t.key)}>{expandedCriticalTrips.has(t.key) ? "Hide" : "Show"}</button>
+                          </div>
+                          {expandedCriticalTrips.has(t.key) && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                              {t.criticalDayKeys.length === t.days && (
+                                <div style={{ fontSize: 11, color: "var(--text-faint)", marginBottom: 2 }}>
+                                  Every day is flagged, so this uses the trip's own credit hours entered above — the amounts below are ignored while every day stays checked.
+                                </div>
+                              )}
+                              {t.keys.map((k) => (
+                                <div key={k} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <label className="chk" style={{ marginRight: 0 }}>
+                                    <input type="checkbox" checked={criticalFlags.has(k)} onChange={() => toggleCriticalDay(k)} /> {k.slice(8)}
+                                  </label>
+                                  <input type="text" value={criticalDayCredits.get(k) || ""} onChange={(e) => setCriticalDayCredit(k, e.target.value)} placeholder="e.g. 0430" style={{ width: 64 }} disabled={t.criticalDayKeys.length === t.days} />
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td><input type="checkbox" checked={t.isLocked} onChange={() => toggleFlag(setLockedFlags, t.key)} /></td>
                     <td style={{ color: t.droppable ? "var(--teal-bright)" : "var(--amber-strong)" }}>
                       {t.isLocked ? "Locked — won't be offered for Swap or Trade Board"
@@ -3341,7 +3435,7 @@ export default function DayOffPayPlanner() {
                 ))}
               </tbody>
             </table>
-            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium is flagged per day — check off just the specific dates that actually carry premium pay on a multi-day trip ("Show" reveals one checkbox per day), or check "Whole trip" right next to "Show" if every day of it is premium — and a trip with any day flagged this way is excluded from swap and trade-board suggestions, same as before, so they don't casually give away extra-value trips. Premium pays 150% (the normal worked credit plus half again). A 1-day trip, or a multi-day trip with every day flagged (via "Whole trip" or by hand), just reuses the credit hours entered above — the sum of every day's own share always equals the trip's total either way, so there's no splitting to get wrong. Only a trip with *some but not all* days flagged needs each of those days' own credit hours typed in next to it once expanded, since there's no way to know just that day's share of the trip's total otherwise. Without credit entered, a flagged day/trip is still protected from swap/trade-board giveaway, it just doesn't add anything to your totals yet. Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
+            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium is flagged per day — check off just the specific dates that actually carry premium pay on a multi-day trip ("Show" reveals one checkbox per day), or check "Whole trip" right next to "Show" if every day of it is premium — and a trip with any day flagged this way is excluded from swap and trade-board suggestions, same as before, so they don't casually give away extra-value trips. Premium pays 200% (the normal worked credit plus a full extra credit again). A 1-day trip, or a multi-day trip with every day flagged (via "Whole trip" or by hand), just reuses the credit hours entered above — the sum of every day's own share always equals the trip's total either way, so there's no splitting to get wrong. Only a trip with *some but not all* days flagged needs each of those days' own credit hours typed in next to it once expanded, since there's no way to know just that day's share of the trip's total otherwise. Without credit entered, a flagged day/trip is still protected from swap/trade-board giveaway, it just doesn't add anything to your totals yet. Critical Coverage/Holiday works exactly the same way, independently of Premium, and pays 150% (the normal worked credit plus half again). Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
           </div>
         )}
 
@@ -3877,9 +3971,9 @@ export default function DayOffPayPlanner() {
                             <input type="checkbox" checked={deniedSwapKeys.has(rowKey)} onChange={() => toggleDeniedSwap(p, rowKey, swapIn)} /> Denied
                           </label>
                           <span style={{ color: "var(--text-primary)", fontFamily: "var(--mono)", fontSize: 13 }}>
-                            Drop <span title={tripHoverSummary(p.a.pairing, p.a.keys, p.a.days, (p.a.destinations || []).join(" "), parseCreditToHours(sdoTripCredits.get(p.a.key)))}>{p.a.pairing}</span>{p.a.isPremium && <span className="badge" style={{ background: "var(--badge-red-bg)", color: "var(--amber-strong)", marginLeft: 4 }}>premium</span>}
+                            Drop <span title={tripHoverSummary(p.a.pairing, p.a.keys, p.a.days, (p.a.destinations || []).join(" "), parseCreditToHours(sdoTripCredits.get(p.a.key)))}>{p.a.pairing}</span>{p.a.isPremium && <span className="badge" style={{ background: "var(--badge-red-bg)", color: "var(--amber-strong)", marginLeft: 4 }}>premium</span>}{p.a.isCritical && <span className="badge" style={{ background: "var(--badge-amber-bg)", color: "var(--amber)", marginLeft: 4 }}>critical/holiday</span>}
                             {" + "}
-                            <span title={tripHoverSummary(p.b.pairing, p.b.keys, p.b.days, (p.b.destinations || []).join(" "), parseCreditToHours(sdoTripCredits.get(p.b.key)))}>{p.b.pairing}</span>{p.b.isPremium && <span className="badge" style={{ background: "var(--badge-red-bg)", color: "var(--amber-strong)", marginLeft: 4 }}>premium</span>}
+                            <span title={tripHoverSummary(p.b.pairing, p.b.keys, p.b.days, (p.b.destinations || []).join(" "), parseCreditToHours(sdoTripCredits.get(p.b.key)))}>{p.b.pairing}</span>{p.b.isPremium && <span className="badge" style={{ background: "var(--badge-red-bg)", color: "var(--amber-strong)", marginLeft: 4 }}>premium</span>}{p.b.isCritical && <span className="badge" style={{ background: "var(--badge-amber-bg)", color: "var(--amber)", marginLeft: 4 }}>critical/holiday</span>}
                           </span>
                         </div>
                         <div style={{ fontSize: 12, color: p.wantsOverlap ? "var(--amber)" : p.wantsKeepOverlap ? "var(--amber)" : "var(--text-muted)", fontFamily: "var(--sans)" }}>
@@ -4108,7 +4202,7 @@ export default function DayOffPayPlanner() {
                         <td><input type="checkbox" checked={isAcc} onChange={() => toggleTbDropAccepted(t)} /></td>
                         <td style={{ color: "var(--text-primary)" }}>{t.pairing}</td>
                         <td>day {t.startDay} +{t.days - 1}d</td>
-                        <td style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-muted)" }}>Not flagged Premium or SDO — whoever picks it up takes over these exact days, so the Reserve Grid doesn't matter here.</td>
+                        <td style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-muted)" }}>Not flagged Premium, Critical/Holiday, or SDO — whoever picks it up takes over these exact days, so the Reserve Grid doesn't matter here.</td>
                       </tr>
                     );
                   })}
@@ -4118,7 +4212,7 @@ export default function DayOffPayPlanner() {
               <div className="hint" style={{ marginTop: 0 }}>
                 {droppableTrips.filter((t) => !t.isSdo && !t.isLocked).length === 0
                   ? "Every remaining trip is either flagged SDO or locked, so there's nothing to post."
-                  : "Every remaining non-SDO, unlocked trip is flagged Premium — posting one would give away extra value, so none are suggested here."}
+                  : "Every remaining non-SDO, unlocked trip is flagged Premium and/or Critical/Holiday — posting one would give away extra value, so none are suggested here."}
               </div>
             ))}
           </>
@@ -4170,7 +4264,7 @@ export default function DayOffPayPlanner() {
                   <select value={tradeOutgoingKey} onChange={(e) => setTradeOutgoingKey(e.target.value)} style={{ width: "100%" }}>
                     <option value="">Select one of your trips…</option>
                     {droppableTrips.filter((t) => (!t.isSdo || allowSdoTrade) && !tradeDetails.has(t.key)).map((t) => (
-                      <option key={t.key} value={t.key}>{t.pairing} — day {t.startDay} +{t.days - 1}d{t.isPremium ? " (premium)" : ""}{t.isSdo ? " (SDO — gives up bonus)" : ""}</option>
+                      <option key={t.key} value={t.key}>{t.pairing} — day {t.startDay} +{t.days - 1}d{t.isPremium ? " (premium)" : ""}{t.isCritical ? " (critical/holiday)" : ""}{t.isSdo ? " (SDO — gives up bonus)" : ""}</option>
                     ))}
                   </select>
                 </div>
@@ -4296,7 +4390,8 @@ export default function DayOffPayPlanner() {
           </div>
 
           {berCreditDelta !== 0 && <div style={{ fontSize: 12, color: "var(--teal-bright)", marginTop: 14 }}>Bereavement credit folded into your Actual total: {formatSignedHours(berCreditDelta)} ({formatMoney(berCreditDelta * hourlyRate)}).</div>}
-          {premiumBonusHours > 0 && <div style={{ fontSize: 12, color: "var(--teal-bright)", marginTop: 14 }}>Premium pay (150%) folded into your Actual total: +{formatHours(premiumBonusHours)} (+{formatMoney(premiumBonusPay)}).</div>}
+          {premiumBonusHours > 0 && <div style={{ fontSize: 12, color: "var(--teal-bright)", marginTop: 14 }}>Premium pay (200%) folded into your Actual total: +{formatHours(premiumBonusHours)} (+{formatMoney(premiumBonusPay)}).</div>}
+          {criticalBonusHours > 0 && <div style={{ fontSize: 12, color: "var(--teal-bright)", marginTop: 14 }}>Critical Coverage/Holiday pay (150%) folded into your Actual total: +{formatHours(criticalBonusHours)} (+{formatMoney(criticalBonusPay)}).</div>}
           {swapDependentSelected > 0 && <div style={{ fontSize: 12, color: "var(--amber)", marginTop: 14 }}>{swapDependentSelected} counted trip{swapDependentSelected === 1 ? "" : "s"} depend{swapDependentSelected === 1 ? "s" : ""} on a swap above going through first — the planned total assumes it does.</div>}
           {belowFloor && <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 14 }}>Trips can't be swapped below 60 credit hours in a month — your worked total is under that floor.</div>}
           {daysOffMarked > 0 && daysOffUsed >= daysOffMarked - 1 && <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 14 }}>You're close to using up every marked day off — your contract still requires minimum days off blocks each month, so keep enough clear.</div>}
