@@ -350,6 +350,9 @@ function parseBoard(text, year) {
 const MAX_CONSECUTIVE_WORK_DAYS = 6;
 const MIN_REST_HOURS = 10;
 const GUARANTEE_HOURS = 75;
+// Premium pay is 150% -- i.e. the normal worked credit (already counted once in baseline) plus
+// this extra half again, specifically for the flagged day(s).
+const PREMIUM_BONUS_FRACTION = 0.5;
 
 function adjacentDateKey(key, deltaDays) {
   const [y, m, d] = key.split("-").map(Number);
@@ -2904,7 +2907,32 @@ export default function DayOffPayPlanner({ session }) {
   // The SDO bonus itself is always added on top, uncapped, either way.
   const confirmedWorkedHours = confirmedBonusHours > 0 && baselineHours >= GUARANTEE_HOURS ? GUARANTEE_HOURS : baselineHours;
   const totalConfirmedCreditHours = confirmedWorkedHours + confirmedBonusHours;
-  const actualTotal = totalConfirmedCreditHours * hourlyRate;
+
+  // Premium pay (150%): baseline already counts a flagged day's worked credit once at the normal
+  // rate, so this only ever needs to add the extra PREMIUM_BONUS_FRACTION (50%) on top, per
+  // flagged day. FLICA never gives day-level credit, only whole-trip credit, so a flagged day's
+  // own share is estimated as an even split of that trip's entered credit across its days --
+  // same averaging `enrichedOpen`'s own perDay already uses elsewhere in this file. This needs
+  // that trip's credit entered in "Your trips" to compute at all (same pre-existing limitation as
+  // the SDO bonus above) -- a flagged day on a trip with no credit entered silently contributes
+  // nothing here, exactly like an SDO-flagged trip with no credit entered contributes nothing to
+  // preExistingSdoBonusHours above. Deliberately independent of the SDO guarantee-floor
+  // substitution just above (confirmedWorkedHours) -- that's an SDO-pay-formula-specific rule, and
+  // Premium pay is unconditional, so it's added on top of actualTotal below, never folded into
+  // confirmedBonusHours/totalConfirmedCreditHours.
+  const premiumBonusHours = useMemo(() => {
+    let sum = 0;
+    droppableTrips.forEach((t) => {
+      if (!t.premiumDayKeys || !t.premiumDayKeys.length || !t.days) return;
+      const h = parseCreditToHours(sdoTripCredits.get(t.key));
+      if (h == null) return;
+      sum += (h / t.days) * PREMIUM_BONUS_FRACTION * t.premiumDayKeys.length;
+    });
+    return sum;
+  }, [droppableTrips, sdoTripCredits]);
+  const premiumBonusPay = premiumBonusHours * hourlyRate;
+
+  const actualTotal = totalConfirmedCreditHours * hourlyRate + premiumBonusPay;
   const plannedTotal = actualTotal + totalCreditHours * hourlyRate + totalBonusPay;
 
   return (
@@ -2992,7 +3020,7 @@ export default function DayOffPayPlanner({ session }) {
               <div style={{ marginBottom: 14 }}>Use the "Light mode" / "Dark mode" button in the top right to switch.</div>
 
               <div style={{ fontWeight: 600, marginBottom: 4 }}>What if my pasted schedule already has SDO and/or premium trips on it?</div>
-              <div style={{ marginBottom: 14 }}>As soon as you paste your schedule, your trips list appears in order with an SDO checkbox and a Premium checkbox on each — Premium is per day, so a multi-day trip shows "Show" to reveal one checkbox per date instead of one for the whole trip, since often only specific calendar days on a trip actually carry premium pay. Check SDO if a trip already qualifies as one (this changes how the tool calculates it), and flag Premium on whichever days need it so swap and Trade Board suggestions don't casually give those days away. For SDO specifically, you also need to manually enter that trip's credit hours — found under TCRD inside the pairing in FLICA — typed the same way FLICA shows it (e.g. 4 hours 30 minutes is "0430", 19 hours 20 minutes is "1920").</div>
+              <div style={{ marginBottom: 14 }}>As soon as you paste your schedule, your trips list appears in order with an SDO checkbox and a Premium checkbox on each — Premium is per day, so a multi-day trip shows "Show" to reveal one checkbox per date instead of one for the whole trip, since often only specific calendar days on a trip actually carry premium pay. Check SDO if a trip already qualifies as one (this changes how the tool calculates it), and flag Premium on whichever days need it — it calculates those days at 150% pay (the normal worked credit plus half again) and also keeps swap/Trade Board suggestions from casually giving those days away. Either one needs that trip's credit hours entered — found under TCRD inside the pairing in FLICA — typed the same way FLICA shows it (e.g. 4 hours 30 minutes is "0430", 19 hours 20 minutes is "1920") — to actually add anything to your totals; a flagged day with no credit entered is still protected, it just doesn't add to the math yet.</div>
 
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Where can I see all the changes I've made, and undo one by mistake?</div>
               <div style={{ marginBottom: 14 }}>The change log at the bottom of the tool lists every confirmed ("Approved") change, each with its own Revert button.</div>
@@ -3259,7 +3287,7 @@ export default function DayOffPayPlanner({ session }) {
                 ))}
               </tbody>
             </table>
-            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium is flagged per day — check off just the specific dates that actually carry premium pay on a multi-day trip ("Show" reveals one checkbox per day) — and a trip with any day flagged this way is excluded from swap and trade-board suggestions, same as before, so they don't casually give away extra-value trips. Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
+            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium is flagged per day — check off just the specific dates that actually carry premium pay on a multi-day trip ("Show" reveals one checkbox per day) — and a trip with any day flagged this way is excluded from swap and trade-board suggestions, same as before, so they don't casually give away extra-value trips. Premium pays 150% (the normal worked credit plus half again): entering this trip's credit hours above is what lets it actually calculate — a flagged day's own share is an even split of this trip's credit across its days, since FLICA never breaks credit down below the whole trip. Without credit entered, a flagged day is still protected from swap/trade-board giveaway, it just doesn't add anything to your totals yet. Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
           </div>
         )}
 
@@ -4199,6 +4227,7 @@ export default function DayOffPayPlanner({ session }) {
           </div>
 
           {berCreditDelta !== 0 && <div style={{ fontSize: 12, color: "var(--teal-bright)", marginTop: 14 }}>Bereavement credit folded into your Actual total: {formatSignedHours(berCreditDelta)} ({formatMoney(berCreditDelta * hourlyRate)}).</div>}
+          {premiumBonusHours > 0 && <div style={{ fontSize: 12, color: "var(--teal-bright)", marginTop: 14 }}>Premium pay (150%) folded into your Actual total: +{formatHours(premiumBonusHours)} (+{formatMoney(premiumBonusPay)}).</div>}
           {swapDependentSelected > 0 && <div style={{ fontSize: 12, color: "var(--amber)", marginTop: 14 }}>{swapDependentSelected} counted trip{swapDependentSelected === 1 ? "" : "s"} depend{swapDependentSelected === 1 ? "s" : ""} on a swap above going through first — the planned total assumes it does.</div>}
           {belowFloor && <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 14 }}>Trips can't be swapped below 60 credit hours in a month — your worked total is under that floor.</div>}
           {daysOffMarked > 0 && daysOffUsed >= daysOffMarked - 1 && <div style={{ fontSize: 12, color: "var(--amber-strong)", marginTop: 14 }}>You're close to using up every marked day off — your contract still requires minimum days off blocks each month, so keep enough clear.</div>}
