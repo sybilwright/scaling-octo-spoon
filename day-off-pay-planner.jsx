@@ -963,6 +963,18 @@ export default function DayOffPayPlanner() {
   function toggleSwapGroupCollapsed(key) {
     setExpandedSwapGroups((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   }
+  // Premium is a per-DAY flag (dateKey), not a per-trip one -- a multi-day trip often only has
+  // specific calendar dates that actually carry premium pay, not every day it touches. Collapsed
+  // by default per trip (expandedPremiumTrips, opt-in just like expandedSwapGroups above) so a
+  // long multi-day trip doesn't sprawl a checkbox per day across the table by default -- a
+  // single-day trip never needs expanding at all, since there's only one day to flag.
+  const [expandedPremiumTrips, setExpandedPremiumTrips] = useState(new Set());
+  function togglePremiumTripExpanded(key) {
+    setExpandedPremiumTrips((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  }
+  function togglePremiumDay(dateKeyStr) {
+    setPremiumFlags((prev) => { const n = new Set(prev); n.has(dateKeyStr) ? n.delete(dateKeyStr) : n.add(dateKeyStr); return n; });
+  }
   const [calVisible, setCalVisible] = useState({ original: true, planned: true, updated: true });
   const [theme, setTheme] = useState("light");
   function toggleTheme() { setTheme((t) => (t === "dark" ? "light" : "dark")); }
@@ -1244,6 +1256,7 @@ export default function DayOffPayPlanner() {
     setSelected(new Set());
     setShowAddsFor(new Set());
     setExpandedSwapGroups(new Set());
+    setExpandedPremiumTrips(new Set());
     setSelectedSwaps(new Set());
     setAcceptedAdds(new Set());
     setAcceptedSwaps(new Set());
@@ -2177,11 +2190,12 @@ export default function DayOffPayPlanner() {
       const blocker = statuses.find((s) => !gridOkForMonth(s.key));
       const key = tripKey(t);
       const isSdo = sdoFlags.has(key);
-      const isPremium = premiumFlags.has(key);
+      const premiumDayKeys = keys.filter((k) => premiumFlags.has(k));
+      const isPremium = premiumDayKeys.length > 0;
       const isLocked = lockedFlags.has(key);
       const wantsOverlap = keys.some((k) => wantedOff.has(k));
       const isInjected = injectedKeys.has(key);
-      return { ...t, keys, droppable: !blocker && !isSdo && !isLocked, gridBlocked: !!blocker, blocker, key, isSdo, isPremium, isLocked, wantsOverlap, isInjected };
+      return { ...t, keys, droppable: !blocker && !isSdo && !isLocked, gridBlocked: !!blocker, blocker, key, isSdo, isPremium, premiumDayKeys, isLocked, wantsOverlap, isInjected };
     });
   }, [scheduleParsed, liveTrips, injectedTrips, combinedGrid, sdoFlags, premiumFlags, lockedFlags, wantedOff, year, month]);
 
@@ -2916,7 +2930,7 @@ export default function DayOffPayPlanner() {
               <div style={{ marginBottom: 14 }}>Use the "Light mode" / "Dark mode" button in the top right to switch.</div>
 
               <div style={{ fontWeight: 600, marginBottom: 4 }}>What if my pasted schedule already has SDO and/or premium trips on it?</div>
-              <div style={{ marginBottom: 14 }}>As soon as you paste your schedule, your trips list appears in order with an SDO checkbox and a Premium checkbox on each. Check SDO if a trip already qualifies as one (this changes how the tool calculates it), and check Premium if it should be calculated at 150% pay. For either one, you also need to manually enter that trip's credit hours — found under TCRD inside the pairing in FLICA — typed the same way FLICA shows it (e.g. 4 hours 30 minutes is "0430", 19 hours 20 minutes is "1920").</div>
+              <div style={{ marginBottom: 14 }}>As soon as you paste your schedule, your trips list appears in order with an SDO checkbox and a Premium checkbox on each — Premium is per day, so a multi-day trip shows "Show" to reveal one checkbox per date instead of one for the whole trip, since often only specific calendar days on a trip actually carry premium pay. Check SDO if a trip already qualifies as one (this changes how the tool calculates it), and flag Premium on whichever days need it so swap and Trade Board suggestions don't casually give those days away. For SDO specifically, you also need to manually enter that trip's credit hours — found under TCRD inside the pairing in FLICA — typed the same way FLICA shows it (e.g. 4 hours 30 minutes is "0430", 19 hours 20 minutes is "1920").</div>
 
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Where can I see all the changes I've made, and undo one by mistake?</div>
               <div style={{ marginBottom: 14 }}>The change log at the bottom of the tool lists every confirmed ("Approved") change, each with its own Revert button.</div>
@@ -3149,7 +3163,27 @@ export default function DayOffPayPlanner() {
                         </div>
                       )}
                     </td>
-                    <td><input type="checkbox" checked={t.isPremium} onChange={() => toggleFlag(setPremiumFlags, t.key)} /></td>
+                    <td>
+                      {t.days === 1 ? (
+                        <input type="checkbox" checked={t.isPremium} onChange={() => togglePremiumDay(t.keys[0])} />
+                      ) : (
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 11, color: t.isPremium ? "var(--amber-strong)" : "var(--text-faint)" }}>{t.premiumDayKeys.length}/{t.days} days</span>
+                            <button className="action small" onClick={() => togglePremiumTripExpanded(t.key)}>{expandedPremiumTrips.has(t.key) ? "Hide" : "Show"}</button>
+                          </div>
+                          {expandedPremiumTrips.has(t.key) && (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                              {t.keys.map((k) => (
+                                <label key={k} className="chk" style={{ marginRight: 0 }}>
+                                  <input type="checkbox" checked={premiumFlags.has(k)} onChange={() => togglePremiumDay(k)} /> {k.slice(8)}
+                                </label>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td><input type="checkbox" checked={t.isLocked} onChange={() => toggleFlag(setLockedFlags, t.key)} /></td>
                     <td style={{ color: t.droppable ? "var(--teal-bright)" : "var(--amber-strong)" }}>
                       {t.isLocked ? "Locked — won't be offered for Swap or Trade Board"
@@ -3163,7 +3197,7 @@ export default function DayOffPayPlanner() {
                 ))}
               </tbody>
             </table>
-            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium trips are flagged so swap and trade-board suggestions don't casually give away extra-value trips. Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
+            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium is flagged per day — check off just the specific dates that actually carry premium pay on a multi-day trip ("Show" reveals one checkbox per day) — and a trip with any day flagged this way is excluded from swap and trade-board suggestions, same as before, so they don't casually give away extra-value trips. Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
           </div>
         )}
 
