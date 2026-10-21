@@ -1178,6 +1178,110 @@ export default function DayOffPayPlanner({ session }) {
     setPendingConfirm(null);
     if (confirmed && pc) pc.onConfirm();
   }
+
+  // Switching the Bid Month used to just change `month` -- nothing else -- so last month's pasted
+  // schedule, Reserve Grid, Opentime pot, Trade Board, days off, baseline, and every Planned/
+  // Approved pick silently carried over into the new month. This was a real bug once: it looked
+  // like the tool was "keeping trips from last month" because it genuinely was. Everything
+  // month-specific resets here, including the hourly rate and every preference (max consecutive
+  // days, min rest, home base, etc.), since those can change month to month too -- only pure UI
+  // state (theme, which sections are collapsed, which calendars are visible) and the explicitly
+  // reference-only Notes/Life Planner survive. Gated behind the same in-app confirm banner every
+  // other destructive action in this tool uses, never a silent wipe.
+  function resetForNewMonth() {
+    setRate("27.06");
+    setBaselineCredit("");
+    setDaysOff(new Set());
+    setWantedText("");
+    setWantedWeekdays(new Set());
+    setMaxConsecutiveDaysPref(String(MAX_CONSECUTIVE_WORK_DAYS));
+    setMinRestDaysPref("");
+    setMinDaysOffPref("");
+    setMinReport("");
+    setMaxArrive("");
+    setApplyTimePref(false);
+    setHomeBase("DFW");
+
+    setScheduleText("");
+    setScheduleParsed(null);
+    lastAppliedScheduleTextRef.current = "";
+    setScheduleUndoSnapshot(null);
+    setGridUndoSnapshot(null);
+    setOpenUndoSnapshot(null);
+    setTradeUndoSnapshot(null);
+
+    setSdoFlags(new Set());
+    setPremiumFlags(new Set());
+    setLockedFlags(new Set());
+    setSdoTripCredits(new Map());
+
+    setGridText("");
+    setGridParsed(null);
+    lastAppliedGridTextRef.current = "";
+    setManualGridRows([]);
+    setGridDateInput("");
+    setGridNetInput("");
+    setGridMinInput("");
+    setGridRowError(null);
+
+    setOpenText("");
+    setOpenBase("DFW");
+    setOpenParsed({ trips: [], error: null });
+    lastAppliedOpenTextRef.current = "";
+    setImageRows([]);
+    setImgPreview(null);
+    setImgBase64(null);
+    setImgMediaType(null);
+    setImgLoading(false);
+    setImgError(null);
+    setExtraBoards([emptyBoardSlot("Base 2"), emptyBoardSlot("Base 3"), emptyBoardSlot("Base 4"), emptyBoardSlot("Base 5")]);
+
+    setTradeText("");
+    setTradeBase("DFW");
+    setTradeParsed({ trips: [], error: null });
+    lastAppliedTradeTextRef.current = "";
+    setExtraTradeBoards(BASES.filter((b) => b.code !== "DFW").map((b) => emptyTradeBoardSlot(b.label, b.code)));
+
+    setSelected(new Set());
+    setShowAddsFor(new Set());
+    setExpandedSwapGroups(new Set());
+    setSelectedSwaps(new Set());
+    setAcceptedAdds(new Set());
+    setAcceptedSwaps(new Set());
+    setDeniedAddIds(new Set());
+    setDeniedSwapKeys(new Set());
+    setInjectedTrips([]);
+    setDroppedTripsPool([]);
+    setConsumedTripKeys(new Set());
+    setPlannedOrder([]);
+    setChangeLog([]);
+    setAcceptedSwapDetails(new Map());
+
+    setTbAddRequested(new Set());
+    setTradeOutgoingKey("");
+    setTradeIncomingMode("board");
+    setTradeIncomingBoardId("");
+    setTradeIncomingOpenPotId("");
+    setTradeManualPairing("");
+    setTradeManualDateTok("");
+    setTradeManualDays("1");
+    setTradeManualCreditRaw("");
+    setTradeManualLayover("");
+    setTradeFormError(null);
+    setAllowSdoTrade(false);
+    setTbAddAccepted(new Set());
+    setTbDropRequested(new Set());
+    setTbDropAccepted(new Set());
+    setTradeDetails(new Map());
+  }
+  function handleMonthChange(newMonth) {
+    if (newMonth === month) return;
+    requestConfirm(
+      "Switching the bid month clears this month's schedule, Reserve Grid, Opentime pot, Trade Board, days off, and every Planned/Approved pick — your hourly rate and preferences reset to their defaults too, since those can change month to month. Continue?",
+      () => { resetForNewMonth(); setMonth(newMonth); }
+    );
+  }
+
   const [showRevertedLog, setShowRevertedLog] = useState(false);
   const [acceptedSwapDetails, setAcceptedSwapDetails] = useState(new Map());
 
@@ -2941,7 +3045,7 @@ export default function DayOffPayPlanner({ session }) {
         <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 10 }}>
           <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Hourly pay ($)</div><input type="text" value={rate} onChange={(e) => setRate(e.target.value)} style={{ width: 90 }} /></div>
           <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Bid year</div><input type="number" value={year} onChange={(e) => setYear(parseInt(e.target.value, 10) || year)} style={{ width: 90 }} /></div>
-          <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Bid month</div><select value={month} onChange={(e) => setMonth(parseInt(e.target.value, 10))}>{MONTH_NAMES.map((m, i) => <option key={i} value={i}>{m}</option>)}</select></div>
+          <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Bid month</div><select value={month} onChange={(e) => handleMonthChange(parseInt(e.target.value, 10))}>{MONTH_NAMES.map((m, i) => <option key={i} value={i}>{m}</option>)}</select></div>
           <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Baseline schedule credit (h)</div><input type="text" value={baselineCredit} onChange={(e) => setBaselineCredit(e.target.value)} style={{ width: 90 }} placeholder="e.g. 81.49" /></div>
         </div>
 
