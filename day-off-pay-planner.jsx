@@ -774,6 +774,12 @@ export default function DayOffPayPlanner() {
   const [daysOff, setDaysOff] = useState(new Set());
   const [wantedText, setWantedText] = useState("");
   const [wantedWeekdays, setWantedWeekdays] = useState(new Set());
+  // The mirror image of "wanted off" above -- specific dates/weekdays the user actively wants to
+  // KEEP working, not give up. Same free-text + weekday-checkbox shape and the same parseWantedDays
+  // parser (it was already generic, never off-specific internally), just a separate set so the two
+  // preferences can't collide with or silently overwrite each other.
+  const [wantedWorkText, setWantedWorkText] = useState("");
+  const [wantedWorkWeekdays, setWantedWorkWeekdays] = useState(new Set());
   const [maxConsecutiveDaysPref, setMaxConsecutiveDaysPref] = useState(String(MAX_CONSECUTIVE_WORK_DAYS));
   const effectiveMaxConsecutive = useMemo(() => {
     const n = parseInt(maxConsecutiveDaysPref, 10);
@@ -796,6 +802,17 @@ export default function DayOffPayPlanner() {
   }
   function toggleWantedWeekends() {
     setWantedWeekdays((prev) => {
+      const n = new Set(prev);
+      const bothOn = n.has(0) && n.has(6);
+      if (bothOn) { n.delete(0); n.delete(6); } else { n.add(0); n.add(6); }
+      return n;
+    });
+  }
+  function toggleWantedWorkWeekday(dow) {
+    setWantedWorkWeekdays((prev) => { const n = new Set(prev); n.has(dow) ? n.delete(dow) : n.add(dow); return n; });
+  }
+  function toggleWantedWorkWeekends() {
+    setWantedWorkWeekdays((prev) => {
       const n = new Set(prev);
       const bothOn = n.has(0) && n.has(6);
       if (bothOn) { n.delete(0); n.delete(6); } else { n.add(0); n.add(6); }
@@ -1218,6 +1235,8 @@ export default function DayOffPayPlanner() {
     setDaysOff(new Set());
     setWantedText("");
     setWantedWeekdays(new Set());
+    setWantedWorkText("");
+    setWantedWorkWeekdays(new Set());
     setMaxConsecutiveDaysPref(String(MAX_CONSECUTIVE_WORK_DAYS));
     setMinRestDaysPref("");
     setMinDaysOffPref("");
@@ -1651,7 +1670,7 @@ export default function DayOffPayPlanner() {
       savedAt: Date.now(),
       rate, year, month, baselineCredit,
       daysOff: [...daysOff],
-      wantedText, wantedWeekdays: [...wantedWeekdays], minReport, maxArrive, applyTimePref, homeBase,
+      wantedText, wantedWeekdays: [...wantedWeekdays], wantedWorkText, wantedWorkWeekdays: [...wantedWorkWeekdays], minReport, maxArrive, applyTimePref, homeBase,
       scheduleText,
       scheduleParsed: scheduleParsed ? { trips: scheduleParsed.trips, daysOff: [...scheduleParsed.daysOff], vacationDays: [...scheduleParsed.vacationDays], protectedDayCodes: [...(scheduleParsed.protectedDayCodes || new Map()).entries()], summary: scheduleParsed.summary } : null,
       sdoFlags: [...sdoFlags], premiumFlags: [...premiumFlags], premiumDayCredits: [...premiumDayCredits.entries()], lockedFlags: [...lockedFlags],
@@ -1703,6 +1722,8 @@ export default function DayOffPayPlanner() {
       if (d.daysOff) setDaysOff(new Set(d.daysOff));
       if (d.wantedText != null) setWantedText(d.wantedText);
       if (d.wantedWeekdays) setWantedWeekdays(new Set(d.wantedWeekdays));
+      if (d.wantedWorkText != null) setWantedWorkText(d.wantedWorkText);
+      if (d.wantedWorkWeekdays) setWantedWorkWeekdays(new Set(d.wantedWorkWeekdays));
       if (d.minReport != null) setMinReport(d.minReport);
       if (d.maxArrive != null) setMaxArrive(d.maxArrive);
       if (d.applyTimePref != null) setApplyTimePref(d.applyTimePref);
@@ -1801,6 +1822,18 @@ export default function DayOffPayPlanner() {
     });
     return combined;
   }, [wantedText, wantedWeekdays, year, month, nextMonth, nextMonthYear]);
+  const wantedToWork = useMemo(() => {
+    const fromText = parseWantedDays(wantedWorkText, year, month, nextMonth, nextMonthYear);
+    if (wantedWorkWeekdays.size === 0) return fromText;
+    const combined = new Set(fromText);
+    [[year, month], [nextMonthYear, nextMonth]].forEach(([y, m]) => {
+      const daysInMonth = new Date(y, m + 1, 0).getDate();
+      for (let day = 1; day <= daysInMonth; day++) {
+        if (wantedWorkWeekdays.has(new Date(y, m, day).getDay())) combined.add(dateKey(y, m, day));
+      }
+    });
+    return combined;
+  }, [wantedWorkText, wantedWorkWeekdays, year, month, nextMonth, nextMonthYear]);
 
   function toggleDayOff(key) {
     setDaysOff((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
@@ -2210,10 +2243,15 @@ export default function DayOffPayPlanner() {
       const isPremium = premiumDayKeys.length > 0;
       const isLocked = lockedFlags.has(key);
       const wantsOverlap = keys.some((k) => wantedOff.has(k));
+      // The mirror case: this trip covers at least one day the user specifically wants to KEEP
+      // working, so dropping it (Swap or Trade Board) would give that day up, contradicting the
+      // preference -- shown as a caution on drop candidates, never an outright block, same spirit
+      // as every other preference in this tool (recommendations respect it, nothing is forced).
+      const wantsKeepOverlap = keys.some((k) => wantedToWork.has(k));
       const isInjected = injectedKeys.has(key);
-      return { ...t, keys, droppable: !blocker && !isSdo && !isLocked, gridBlocked: !!blocker, blocker, key, isSdo, isPremium, premiumDayKeys, isLocked, wantsOverlap, isInjected };
+      return { ...t, keys, droppable: !blocker && !isSdo && !isLocked, gridBlocked: !!blocker, blocker, key, isSdo, isPremium, premiumDayKeys, isLocked, wantsOverlap, wantsKeepOverlap, isInjected };
     });
-  }, [scheduleParsed, liveTrips, injectedTrips, combinedGrid, sdoFlags, premiumFlags, lockedFlags, wantedOff, year, month]);
+  }, [scheduleParsed, liveTrips, injectedTrips, combinedGrid, sdoFlags, premiumFlags, lockedFlags, wantedOff, wantedToWork, year, month]);
 
   const originalCalendarText = useMemo(() => {
     if (!scheduleParsed) return null;
@@ -2261,9 +2299,14 @@ export default function DayOffPayPlanner() {
       const violatesRest = violatesRestRule(keys, t.report, t.arrive);
       const violatesMinRest = keys.length > 0 && violatesMinRestGap(occupiedDateKeys, keys, effectiveMinRestDays);
       const violatesMinDaysOff = violatesMinDaysOffFloor(keys);
-      return { ...t, dateKeys: keys, overlap, eligible, missing, pay, perDay, fitsTime: passesTimePref(t), usesWanted: keys.some((k) => wantedOff.has(k)), exceedsMaxStreak, violatesRest, violatesMinRest, violatesMinDaysOff, onVacation };
+      // Opposite of usesWanted above: this Add candidate actually lands on a day the user marked
+      // as wanted to work -- a positive match worth calling out, not a caution, since picking it
+      // up is exactly what the preference is asking for (most relevant when that day is currently
+      // off and the user is hoping to find a pickup specifically there).
+      const matchesWantedWork = keys.some((k) => wantedToWork.has(k));
+      return { ...t, dateKeys: keys, overlap, eligible, missing, pay, perDay, fitsTime: passesTimePref(t), usesWanted: keys.some((k) => wantedOff.has(k)), matchesWantedWork, exceedsMaxStreak, violatesRest, violatesMinRest, violatesMinDaysOff, onVacation };
     });
-  }, [allOpenTrips, daysOff, hourlyRate, wantedOff, applyTimePref, minReport, maxArrive, homeBase, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
+  }, [allOpenTrips, daysOff, hourlyRate, wantedOff, wantedToWork, applyTimePref, minReport, maxArrive, homeBase, occupiedDateKeys, dutyReportByDate, dutyArriveByDate, vacationDateKeys, effectiveMaxConsecutive, effectiveMinRestDays, effectiveMinDaysOff, year, month]);
 
   const eligibleSorted = useMemo(() => enrichedOpen.filter((t) => t.eligible && t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !deniedAddIds.has(t.id)).slice().sort((a, b) => (b.perDay || 0) - (a.perDay || 0)), [enrichedOpen, deniedAddIds]);
   const nearMiss = useMemo(() => enrichedOpen.filter((t) => !t.eligible && !t.autoTB && t.start && t.overlap > 0 && t.fitsTime && !t.exceedsMaxStreak && !t.violatesRest && !t.violatesMinRest && !t.violatesMinDaysOff && !deniedAddIds.has(t.id)).slice().sort((a, b) => a.missing.length - b.missing.length), [enrichedOpen, deniedAddIds]);
@@ -2376,7 +2419,7 @@ export default function DayOffPayPlanner() {
       // toggleDeniedSwap) not per pair, since the same two dropped trips can have several
       // different swap-in options and only one of those needs to be denied. Filtered below,
       // once each row's actual key exists, not here.
-      swapPairs.push({ a, b, pairKey: pairKeyStr, totalDaysFreed: a.days + b.days, wantsOverlap: a.wantsOverlap || b.wantsOverlap });
+      swapPairs.push({ a, b, pairKey: pairKeyStr, totalDaysFreed: a.days + b.days, wantsOverlap: a.wantsOverlap || b.wantsOverlap, wantsKeepOverlap: a.wantsKeepOverlap || b.wantsKeepOverlap });
     }
   }
   swapPairs.sort((x, y) => (x.wantsOverlap !== y.wantsOverlap ? (x.wantsOverlap ? -1 : 1) : y.totalDaysFreed - x.totalDaysFreed));
@@ -3075,6 +3118,22 @@ export default function DayOffPayPlanner() {
         </div>
 
         <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Work specific days of the week</div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+            {[["M", 1], ["T", 2], ["W", 3], ["T", 4], ["F", 5], ["S", 6], ["Su", 0]].map(([label, dow]) => (
+              <label key={dow} className="chk">
+                <input type="checkbox" checked={wantedWorkWeekdays.has(dow)} onChange={() => toggleWantedWorkWeekday(dow)} /> {label}
+              </label>
+            ))}
+            <span style={{ width: 1, height: 16, background: "var(--border)" }} />
+            <label className="chk">
+              <input type="checkbox" checked={wantedWorkWeekdays.has(0) && wantedWorkWeekdays.has(6)} onChange={toggleWantedWorkWeekends} /> Weekends
+            </label>
+          </div>
+          <div className="hint" style={{ marginTop: 6, marginBottom: 0 }}>The opposite of "wanted off" above — days you specifically want to keep working, not give up. Combines with the specific dates below. Swap/Trade Board drop candidates touching one of these days get a caution instead of being recommended for drop, and an Opentime pot Add landing on one gets called out as a match for this preference — nothing is ever blocked outright, same as every other preference here.</div>
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Max consecutive working days you're willing to accept</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <input
@@ -3122,11 +3181,18 @@ export default function DayOffPayPlanner() {
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 6 }}>
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 20 }}>
           <div style={{ flex: "1 1 260px" }}>
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Days you want off (comma-separated, e.g. 12,13,20 or 10/2)</div>
             <input type="text" value={wantedText} onChange={(e) => setWantedText(e.target.value)} style={{ width: "100%" }} placeholder="12,13,20" />
           </div>
+          <div style={{ flex: "1 1 260px" }}>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Days you want to work (comma-separated, e.g. 12,13,20 or 10/2)</div>
+            <input type="text" value={wantedWorkText} onChange={(e) => setWantedWorkText(e.target.value)} style={{ width: "100%" }} placeholder="12,13,20" />
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 6 }}>
           <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Report no earlier than (military time)</div><input type="text" value={minReport} onChange={(e) => setMinReport(e.target.value)} style={{ width: 90 }} placeholder="09:00" /></div>
           <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Arrive no later than (military time)</div><input type="text" value={maxArrive} onChange={(e) => setMaxArrive(e.target.value)} style={{ width: 90 }} placeholder="18:00" /></div>
           <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Your base (time zone)</div><select value={homeBase} onChange={(e) => setHomeBase(e.target.value)}>{BASES.map((b) => <option key={b.code} value={b.code}>{b.label}</option>)}</select></div>
@@ -3237,7 +3303,7 @@ export default function DayOffPayPlanner() {
                         : t.isSdo ? "Already SDO — dropping forfeits its bonus"
                         : t.gridBlocked ? `Blocked — ${t.blocker.status} on ${t.blocker.key.slice(5)}`
                         : !hasGridData ? "Grid data needed"
-                        : "All green — droppable" + (t.wantsOverlap ? " · frees a wanted day" : "")}
+                        : "All green — droppable" + (t.wantsOverlap ? " · frees a wanted day" : "") + (t.wantsKeepOverlap ? " · would give up a day you wanted to work" : "")}
                     </td>
                     <td>{t.droppable && <button className="action small" onClick={() => addDaysOff(t.keys)}>Mark these days off</button>}</td>
                   </tr>
@@ -3614,12 +3680,17 @@ export default function DayOffPayPlanner() {
                             Uses up a day you marked as wanted off.
                           </div>
                         )}
+                        {t.matchesWantedWork && (
+                          <div style={{ fontSize: 10, color: "var(--teal-bright)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
+                            Lands on a day you marked as wanted to work.
+                          </div>
+                        )}
                       </td>
                       <td>{t.dateTok} +{t.days - 1}d</td>
                       <td>{formatHours(t.creditHours)}</td>
                       <td style={{ color: "var(--teal-bright)" }}>{t.pay != null ? formatMoney(t.pay) : "—"}</td>
                       <td>{t.perDay != null ? formatMoney(t.perDay) : "—"}</td>
-                      <td>{t.usesWanted && <span className="badge" style={{ background: "var(--badge-amber-bg)", color: "var(--amber)" }}>wanted day</span>}</td>
+                      <td>{t.usesWanted && <span className="badge" style={{ background: "var(--badge-amber-bg)", color: "var(--amber)" }}>wanted day</span>}{t.matchesWantedWork && <span className="badge" style={{ background: "var(--border-teal-soft)", color: "var(--teal-bright)", marginLeft: t.usesWanted ? 4 : 0 }}>wanted work</span>}</td>
                     </tr>
                   );
                 })}
@@ -3716,6 +3787,11 @@ export default function DayOffPayPlanner() {
                             Uses up a day you marked as wanted off.
                           </div>
                         )}
+                        {t.matchesWantedWork && (
+                          <div style={{ fontSize: 10, color: "var(--teal-bright)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
+                            Lands on a day you marked as wanted to work.
+                          </div>
+                        )}
                       </td>
                       <td>{t.dateTok} +{t.days - 1}d</td>
                       <td>{formatHours(t.creditHours)}</td>
@@ -3775,8 +3851,8 @@ export default function DayOffPayPlanner() {
                             <span title={tripHoverSummary(p.b.pairing, p.b.keys, p.b.days, (p.b.destinations || []).join(" "), parseCreditToHours(sdoTripCredits.get(p.b.key)))}>{p.b.pairing}</span>{p.b.isPremium && <span className="badge" style={{ background: "var(--badge-red-bg)", color: "var(--amber-strong)", marginLeft: 4 }}>premium</span>}
                           </span>
                         </div>
-                        <div style={{ fontSize: 12, color: p.wantsOverlap ? "var(--amber)" : "var(--text-muted)", fontFamily: "var(--sans)" }}>
-                          Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · would get rid of a day you wanted off" : ""}
+                        <div style={{ fontSize: 12, color: p.wantsOverlap ? "var(--amber)" : p.wantsKeepOverlap ? "var(--amber)" : "var(--text-muted)", fontFamily: "var(--sans)" }}>
+                          Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · would get rid of a day you wanted off" : ""}{p.wantsKeepOverlap ? " · would give up a day you wanted to work" : ""}
                         </div>
                       </div>
                       {approveWouldViolateFloor && (() => {
@@ -3849,6 +3925,11 @@ export default function DayOffPayPlanner() {
                                             Uses up a day you marked as wanted off.
                                           </div>
                                         )}
+                                        {t.matchesWantedWork && (
+                                          <div style={{ fontSize: 10, color: "var(--teal-bright)", fontFamily: "var(--sans)", fontWeight: 400, marginTop: 2 }}>
+                                            Lands on a day you marked as wanted to work.
+                                          </div>
+                                        )}
                                       </td>
                                       <td>{t.dateTok} +{t.days - 1}d</td>
                                       <td>{formatHours(t.creditHours)}</td>
@@ -3907,8 +3988,8 @@ export default function DayOffPayPlanner() {
                             ))}
                           </span>
                         </div>
-                        <div style={{ fontSize: 12, color: p.wantsOverlap ? "var(--amber)" : "var(--text-muted)", fontFamily: "var(--sans)" }}>
-                          Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · would get rid of a day you wanted off" : ""}
+                        <div style={{ fontSize: 12, color: p.wantsOverlap ? "var(--amber)" : p.wantsKeepOverlap ? "var(--amber)" : "var(--text-muted)", fontFamily: "var(--sans)" }}>
+                          Frees {freedKeys.length} day{freedKeys.length === 1 ? "" : "s"}{p.wantsOverlap ? " · would get rid of a day you wanted off" : ""}{p.wantsKeepOverlap ? " · would give up a day you wanted to work" : ""}
                         </div>
                       </div>
                       {approveWouldViolateFloor && (() => {
