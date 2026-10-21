@@ -836,6 +836,16 @@ export default function DayOffPayPlanner() {
   function setSdoTripCredit(key, value) {
     setSdoTripCredits((prev) => { const n = new Map(prev); if (value === "") n.delete(key); else n.set(key, value); return n; });
   }
+  // A trip's total credit hours are never split evenly across its days -- a duty day's own block/
+  // credit time varies day to day, so Premium pay on a MULTI-day trip needs that specific flagged
+  // day's own credit hours entered by hand, never averaged from the trip total. Keyed by date (same
+  // keys as premiumFlags), separate from sdoTripCredits (which is per-trip). A 1-day trip has no
+  // such ambiguity to begin with -- its one day's credit IS the trip's credit, so it reuses
+  // sdoTripCredits directly and never needs an entry here (see premiumBonusHours below).
+  const [premiumDayCredits, setPremiumDayCredits] = useState(new Map());
+  function setPremiumDayCredit(dayKeyStr, value) {
+    setPremiumDayCredits((prev) => { const n = new Map(prev); if (value === "") n.delete(dayKeyStr); else n.set(dayKeyStr, value); return n; });
+  }
 
   const [gridText, setGridText] = useState("");
   const [gridParsed, setGridParsed] = useState(null);
@@ -1226,6 +1236,7 @@ export default function DayOffPayPlanner() {
 
     setSdoFlags(new Set());
     setPremiumFlags(new Set());
+    setPremiumDayCredits(new Map());
     setLockedFlags(new Set());
     setSdoTripCredits(new Map());
 
@@ -1643,7 +1654,7 @@ export default function DayOffPayPlanner() {
       wantedText, wantedWeekdays: [...wantedWeekdays], minReport, maxArrive, applyTimePref, homeBase,
       scheduleText,
       scheduleParsed: scheduleParsed ? { trips: scheduleParsed.trips, daysOff: [...scheduleParsed.daysOff], vacationDays: [...scheduleParsed.vacationDays], protectedDayCodes: [...(scheduleParsed.protectedDayCodes || new Map()).entries()], summary: scheduleParsed.summary } : null,
-      sdoFlags: [...sdoFlags], premiumFlags: [...premiumFlags], lockedFlags: [...lockedFlags],
+      sdoFlags: [...sdoFlags], premiumFlags: [...premiumFlags], premiumDayCredits: [...premiumDayCredits.entries()], lockedFlags: [...lockedFlags],
       gridText, manualGridRows, gridParsed: gridParsed ? { ...gridParsed, grid: [...gridParsed.grid.entries()] } : null,
       openText, openBase, openParsed, imageRows,
       extraBoards: extraBoards.map((b) => ({ ...b, imgPreview: null, imgBase64: null, imgError: null, imgLoading: false })),
@@ -1700,6 +1711,7 @@ export default function DayOffPayPlanner() {
       if (d.scheduleParsed) setScheduleParsed({ trips: d.scheduleParsed.trips, daysOff: new Set(d.scheduleParsed.daysOff), vacationDays: new Set(d.scheduleParsed.vacationDays || []), protectedDayCodes: new Map(d.scheduleParsed.protectedDayCodes || []), summary: d.scheduleParsed.summary });
       if (d.sdoFlags) setSdoFlags(new Set(d.sdoFlags));
       if (d.premiumFlags) setPremiumFlags(new Set(d.premiumFlags));
+      if (d.premiumDayCredits) setPremiumDayCredits(new Map(d.premiumDayCredits));
       if (d.lockedFlags) setLockedFlags(new Set(d.lockedFlags));
       if (d.gridText != null) setGridText(d.gridText);
       if (d.gridParsed) setGridParsed({ ...d.gridParsed, grid: new Map(d.gridParsed.grid) });
@@ -1813,7 +1825,7 @@ export default function DayOffPayPlanner() {
   function applyScheduleText(text) {
     setScheduleUndoSnapshot({
       scheduleText: lastAppliedScheduleTextRef.current, scheduleParsed, daysOff: new Set(daysOff), baselineCredit,
-      sdoFlags: new Set(sdoFlags), premiumFlags: new Set(premiumFlags),
+      sdoFlags: new Set(sdoFlags), premiumFlags: new Set(premiumFlags), premiumDayCredits: new Map(premiumDayCredits),
     });
     lastAppliedScheduleTextRef.current = text;
     const result = parseSchedule(text, year, month);
@@ -1855,13 +1867,14 @@ export default function DayOffPayPlanner() {
       return next;
     });
     setPremiumFlags(new Set());
+    setPremiumDayCredits(new Map());
   }
   function handleParseSchedule() { applyScheduleText(scheduleText); }
   function undoScheduleParse() {
     if (!scheduleUndoSnapshot) return;
     const s = scheduleUndoSnapshot;
     setScheduleText(s.scheduleText); setScheduleParsed(s.scheduleParsed); setDaysOff(s.daysOff);
-    setBaselineCredit(s.baselineCredit); setSdoFlags(s.sdoFlags); setPremiumFlags(s.premiumFlags);
+    setBaselineCredit(s.baselineCredit); setSdoFlags(s.sdoFlags); setPremiumFlags(s.premiumFlags); setPremiumDayCredits(s.premiumDayCredits || new Map());
     lastAppliedScheduleTextRef.current = s.scheduleText;
     setScheduleUndoSnapshot(null);
   }
@@ -2848,26 +2861,29 @@ export default function DayOffPayPlanner() {
 
   // Premium pay (150%): baseline already counts a flagged day's worked credit once at the normal
   // rate, so this only ever needs to add the extra PREMIUM_BONUS_FRACTION (50%) on top, per
-  // flagged day. FLICA never gives day-level credit, only whole-trip credit, so a flagged day's
-  // own share is estimated as an even split of that trip's entered credit across its days --
-  // same averaging `enrichedOpen`'s own perDay already uses elsewhere in this file. This needs
-  // that trip's credit entered in "Your trips" to compute at all (same pre-existing limitation as
-  // the SDO bonus above) -- a flagged day on a trip with no credit entered silently contributes
-  // nothing here, exactly like an SDO-flagged trip with no credit entered contributes nothing to
-  // preExistingSdoBonusHours above. Deliberately independent of the SDO guarantee-floor
-  // substitution just above (confirmedWorkedHours) -- that's an SDO-pay-formula-specific rule, and
-  // Premium pay is unconditional, so it's added on top of actualTotal below, never folded into
-  // confirmedBonusHours/totalConfirmedCreditHours.
+  // flagged day. A trip's total credit is never split evenly across its days -- a duty day's own
+  // block/credit time varies day to day -- so a flagged day's own credit has to come from
+  // premiumDayCredits, entered by hand for that specific date, never averaged from the trip total.
+  // The one exception is a 1-day trip: there's no splitting question to begin with, since its one
+  // day's credit IS the trip's credit, so it reuses the already-entered sdoTripCredits value
+  // directly rather than asking for the same number twice. Either way this needs that credit
+  // entered to compute at all (same pre-existing limitation as the SDO bonus above) -- a flagged
+  // day with no credit entered silently contributes nothing here, exactly like an SDO-flagged trip
+  // with no credit entered contributes nothing to preExistingSdoBonusHours above. Deliberately
+  // independent of the SDO guarantee-floor substitution just above (confirmedWorkedHours) --
+  // that's an SDO-pay-formula-specific rule, and Premium pay is unconditional, so it's added on
+  // top of actualTotal below, never folded into confirmedBonusHours/totalConfirmedCreditHours.
   const premiumBonusHours = useMemo(() => {
     let sum = 0;
     droppableTrips.forEach((t) => {
-      if (!t.premiumDayKeys || !t.premiumDayKeys.length || !t.days) return;
-      const h = parseCreditToHours(sdoTripCredits.get(t.key));
-      if (h == null) return;
-      sum += (h / t.days) * PREMIUM_BONUS_FRACTION * t.premiumDayKeys.length;
+      if (!t.premiumDayKeys || !t.premiumDayKeys.length) return;
+      t.premiumDayKeys.forEach((k) => {
+        const h = t.days === 1 ? parseCreditToHours(sdoTripCredits.get(t.key)) : parseCreditToHours(premiumDayCredits.get(k));
+        if (h != null) sum += h * PREMIUM_BONUS_FRACTION;
+      });
     });
     return sum;
-  }, [droppableTrips, sdoTripCredits]);
+  }, [droppableTrips, sdoTripCredits, premiumDayCredits]);
   const premiumBonusPay = premiumBonusHours * hourlyRate;
 
   const actualTotal = totalConfirmedCreditHours * hourlyRate + premiumBonusPay;
@@ -2958,7 +2974,7 @@ export default function DayOffPayPlanner() {
               <div style={{ marginBottom: 14 }}>Use the "Light mode" / "Dark mode" button in the top right to switch.</div>
 
               <div style={{ fontWeight: 600, marginBottom: 4 }}>What if my pasted schedule already has SDO and/or premium trips on it?</div>
-              <div style={{ marginBottom: 14 }}>As soon as you paste your schedule, your trips list appears in order with an SDO checkbox and a Premium checkbox on each — Premium is per day, so a multi-day trip shows "Show" to reveal one checkbox per date instead of one for the whole trip, since often only specific calendar days on a trip actually carry premium pay. Check SDO if a trip already qualifies as one (this changes how the tool calculates it), and flag Premium on whichever days need it — it calculates those days at 150% pay (the normal worked credit plus half again) and also keeps swap/Trade Board suggestions from casually giving those days away. Either one needs that trip's credit hours entered — found under TCRD inside the pairing in FLICA — typed the same way FLICA shows it (e.g. 4 hours 30 minutes is "0430", 19 hours 20 minutes is "1920") — to actually add anything to your totals; a flagged day with no credit entered is still protected, it just doesn't add to the math yet.</div>
+              <div style={{ marginBottom: 14 }}>As soon as you paste your schedule, your trips list appears in order with an SDO checkbox and a Premium checkbox on each — Premium is per day, so a multi-day trip shows "Show" to reveal one checkbox per date instead of one for the whole trip, since often only specific calendar days on a trip actually carry premium pay. Check SDO if a trip already qualifies as one (this changes how the tool calculates it), and flag Premium on whichever days need it — it calculates those days at 150% pay (the normal worked credit plus half again) and also keeps swap/Trade Board suggestions from casually giving those days away. Credit hours — found under TCRD inside the pairing in FLICA, typed the same way FLICA shows it (e.g. 4 hours 30 minutes is "0430") — are what let either one actually add to your totals: SDO uses the trip's overall credit hours entered next to it, while Premium on a multi-day trip needs each flagged day's own credit hours entered right next to that day once expanded, since a trip's total is never split evenly across its days (a 1-day trip has no such split to worry about, so it just reuses the trip's overall credit hours). A flagged day with no credit entered is still protected, it just doesn't add to the math yet.</div>
 
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Where can I see all the changes I've made, and undo one by mistake?</div>
               <div style={{ marginBottom: 14 }}>The change log at the bottom of the tool lists every confirmed ("Approved") change, each with its own Revert button.</div>
@@ -3201,11 +3217,14 @@ export default function DayOffPayPlanner() {
                             <button className="action small" onClick={() => togglePremiumTripExpanded(t.key)}>{expandedPremiumTrips.has(t.key) ? "Hide" : "Show"}</button>
                           </div>
                           {expandedPremiumTrips.has(t.key) && (
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
                               {t.keys.map((k) => (
-                                <label key={k} className="chk" style={{ marginRight: 0 }}>
-                                  <input type="checkbox" checked={premiumFlags.has(k)} onChange={() => togglePremiumDay(k)} /> {k.slice(8)}
-                                </label>
+                                <div key={k} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <label className="chk" style={{ marginRight: 0 }}>
+                                    <input type="checkbox" checked={premiumFlags.has(k)} onChange={() => togglePremiumDay(k)} /> {k.slice(8)}
+                                  </label>
+                                  <input type="text" value={premiumDayCredits.get(k) || ""} onChange={(e) => setPremiumDayCredit(k, e.target.value)} placeholder="e.g. 0430" style={{ width: 64 }} />
+                                </div>
                               ))}
                             </div>
                           )}
@@ -3225,7 +3244,7 @@ export default function DayOffPayPlanner() {
                 ))}
               </tbody>
             </table>
-            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium is flagged per day — check off just the specific dates that actually carry premium pay on a multi-day trip ("Show" reveals one checkbox per day) — and a trip with any day flagged this way is excluded from swap and trade-board suggestions, same as before, so they don't casually give away extra-value trips. Premium pays 150% (the normal worked credit plus half again): entering this trip's credit hours above is what lets it actually calculate — a flagged day's own share is an even split of this trip's credit across its days, since FLICA never breaks credit down below the whole trip. Without credit entered, a flagged day is still protected from swap/trade-board giveaway, it just doesn't add anything to your totals yet. Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
+            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium is flagged per day — check off just the specific dates that actually carry premium pay on a multi-day trip ("Show" reveals one checkbox per day) — and a trip with any day flagged this way is excluded from swap and trade-board suggestions, same as before, so they don't casually give away extra-value trips. Premium pays 150% (the normal worked credit plus half again). A trip's total credit is never split evenly across its days, so on a multi-day trip each flagged day needs its own credit hours typed in next to it once expanded, not the trip's overall total — a 1-day trip has no such split to worry about, so it just reuses the credit hours entered above. Without a day's credit entered, it's still protected from swap/trade-board giveaway, it just doesn't add anything to your totals yet. Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
           </div>
         )}
 
