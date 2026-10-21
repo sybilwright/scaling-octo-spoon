@@ -1468,6 +1468,7 @@ export default function DayOffPayPlanner() {
   const [swapsSectionOpen, setSwapsSectionOpen] = useState(true);
   const [tbPostSectionOpen, setTbPostSectionOpen] = useState(true);
   const [tbAddSectionOpen, setTbAddSectionOpen] = useState(true);
+  const [changeLogSectionOpen, setChangeLogSectionOpen] = useState(true);
   const [allowSdoTrade, setAllowSdoTrade] = useState(false);
   const [tbAddAccepted, setTbAddAccepted] = useState(new Set());
   const [tbDropRequested, setTbDropRequested] = useState(new Set());
@@ -1646,6 +1647,7 @@ export default function DayOffPayPlanner() {
       notesOpen, notesText, plannerOpen, dayPlans, maxConsecutiveDaysPref, minRestDaysPref, minDaysOffPref,
       tradeSectionOpen, allowSdoTrade, openPotViewerOpen,
       addsReadySectionOpen, combinedAddsSectionOpen, addsNearMissSectionOpen, swapsSectionOpen, tbPostSectionOpen, tbAddSectionOpen,
+      changeLogSectionOpen,
       calVisible, theme,
     };
   }
@@ -1729,6 +1731,7 @@ export default function DayOffPayPlanner() {
       if (d.swapsSectionOpen != null) setSwapsSectionOpen(d.swapsSectionOpen);
       if (d.tbPostSectionOpen != null) setTbPostSectionOpen(d.tbPostSectionOpen);
       if (d.tbAddSectionOpen != null) setTbAddSectionOpen(d.tbAddSectionOpen);
+      if (d.changeLogSectionOpen != null) setChangeLogSectionOpen(d.changeLogSectionOpen);
       if (d.allowSdoTrade != null) setAllowSdoTrade(d.allowSdoTrade);
       if (d.calVisible) setCalVisible(d.calVisible);
       if (d.theme) setTheme(d.theme);
@@ -4147,8 +4150,11 @@ export default function DayOffPayPlanner() {
         </div>
 
         <div style={{ borderTop: "1px solid var(--border)", marginTop: 24, paddingTop: 20 }}>
-          <div className="h">Change log</div>
-          {changeLog.length === 0 ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setChangeLogSectionOpen((v) => !v)}>
+            <div className="h" style={{ marginBottom: 0 }}>Change log</div>
+            <button className="action small" onClick={(e) => { e.stopPropagation(); setChangeLogSectionOpen((v) => !v); }}>{changeLogSectionOpen ? "Hide" : "Show"}</button>
+          </div>
+          {changeLogSectionOpen && (changeLog.length === 0 ? (
             <div className="hint" style={{ marginTop: 0 }}>No changes yet — accept, deny, or restore something above and it'll show up here, in order, with a one-click revert.</div>
           ) : (
             <div>
@@ -4178,7 +4184,7 @@ export default function DayOffPayPlanner() {
                 </div>
               )}
             </div>
-          )}
+          ))}
         </div>
       </div>
     </div>
