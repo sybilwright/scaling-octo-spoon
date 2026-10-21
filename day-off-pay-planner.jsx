@@ -1280,6 +1280,16 @@ export default function DayOffPayPlanner() {
       () => { resetForNewMonth(); setMonth(newMonth); }
     );
   }
+  // Bid Year is a dropdown of a small fixed range (not a free-text field, specifically so this
+  // same confirm-and-reset flow can apply to it too -- a free-typed number would fire this on
+  // every keystroke, which is why Bid Year never had it before).
+  function handleYearChange(newYear) {
+    if (newYear === year) return;
+    requestConfirm(
+      "Switching the bid year clears this month's schedule, Reserve Grid, Opentime pot, Trade Board, days off, and every Planned/Approved pick — your hourly rate and preferences reset to their defaults too, since those can change month to month. Continue?",
+      () => { resetForNewMonth(); setYear(newYear); }
+    );
+  }
 
   const [showRevertedLog, setShowRevertedLog] = useState(false);
   const [acceptedSwapDetails, setAcceptedSwapDetails] = useState(new Map());
@@ -2982,7 +2992,7 @@ export default function DayOffPayPlanner() {
 
         <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 10 }}>
           <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Hourly pay ($)</div><input type="text" value={rate} onChange={(e) => setRate(e.target.value)} style={{ width: 90 }} /></div>
-          <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Bid year</div><input type="number" value={year} onChange={(e) => setYear(parseInt(e.target.value, 10) || year)} style={{ width: 90 }} /></div>
+          <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Bid year</div><select value={year} onChange={(e) => handleYearChange(parseInt(e.target.value, 10))}>{[...new Set([...Array.from({ length: 4 }, (_, i) => today.getFullYear() - 1 + i), year])].sort((a, b) => a - b).map((y) => <option key={y} value={y}>{y}</option>)}</select></div>
           <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Bid month</div><select value={month} onChange={(e) => handleMonthChange(parseInt(e.target.value, 10))}>{MONTH_NAMES.map((m, i) => <option key={i} value={i}>{m}</option>)}</select></div>
           <div><div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Baseline schedule credit (h)</div><input type="text" value={baselineCredit} onChange={(e) => setBaselineCredit(e.target.value)} style={{ width: 90 }} placeholder="e.g. 81.49" /></div>
         </div>
