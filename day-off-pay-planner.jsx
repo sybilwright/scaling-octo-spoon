@@ -1005,6 +1005,20 @@ export default function DayOffPayPlanner() {
   function togglePremiumDay(dateKeyStr) {
     setPremiumFlags((prev) => { const n = new Set(prev); n.has(dateKeyStr) ? n.delete(dateKeyStr) : n.add(dateKeyStr); return n; });
   }
+  // Convenience for the common case of a whole trip being premium, not just one or two days of it
+  // -- flags (or clears) every day of the trip at once instead of clicking each day individually.
+  // Pure UI shortcut over the same per-day premiumFlags/premiumDayCredits -- still needs each
+  // day's own credit entered separately for the bonus to actually compute, same as checking days
+  // off one at a time would, since a trip's credit is never split evenly across its days.
+  function toggleWholeTripPremium(trip) {
+    setPremiumFlags((prev) => {
+      const n = new Set(prev);
+      const allFlagged = trip.keys.every((k) => n.has(k));
+      if (allFlagged) trip.keys.forEach((k) => n.delete(k));
+      else trip.keys.forEach((k) => n.add(k));
+      return n;
+    });
+  }
   const [calVisible, setCalVisible] = useState({ original: true, planned: true, updated: true });
   const [theme, setTheme] = useState("light");
   function toggleTheme() { setTheme((t) => (t === "dark" ? "light" : "dark")); }
@@ -3017,7 +3031,7 @@ export default function DayOffPayPlanner() {
               <div style={{ marginBottom: 14 }}>Use the "Light mode" / "Dark mode" button in the top right to switch.</div>
 
               <div style={{ fontWeight: 600, marginBottom: 4 }}>What if my pasted schedule already has SDO and/or premium trips on it?</div>
-              <div style={{ marginBottom: 14 }}>As soon as you paste your schedule, your trips list appears in order with an SDO checkbox and a Premium checkbox on each — Premium is per day, so a multi-day trip shows "Show" to reveal one checkbox per date instead of one for the whole trip, since often only specific calendar days on a trip actually carry premium pay. Check SDO if a trip already qualifies as one (this changes how the tool calculates it), and flag Premium on whichever days need it — it calculates those days at 150% pay (the normal worked credit plus half again) and also keeps swap/Trade Board suggestions from casually giving those days away. Credit hours — found under TCRD inside the pairing in FLICA, typed the same way FLICA shows it (e.g. 4 hours 30 minutes is "0430") — are what let either one actually add to your totals: SDO uses the trip's overall credit hours entered next to it, while Premium on a multi-day trip needs each flagged day's own credit hours entered right next to that day once expanded, since a trip's total is never split evenly across its days (a 1-day trip has no such split to worry about, so it just reuses the trip's overall credit hours). A flagged day with no credit entered is still protected, it just doesn't add to the math yet.</div>
+              <div style={{ marginBottom: 14 }}>As soon as you paste your schedule, your trips list appears in order with an SDO checkbox and a Premium checkbox on each — Premium is per day, so a multi-day trip shows "Show" to reveal one checkbox per date instead of one for the whole trip, since often only specific calendar days on a trip actually carry premium pay. If the whole trip actually is premium, check "Whole trip" right next to "Show" instead of each day individually — it just flags every day at once, same as clicking them all by hand. Check SDO if a trip already qualifies as one (this changes how the tool calculates it), and flag Premium on whichever days need it — it calculates those days at 150% pay (the normal worked credit plus half again) and also keeps swap/Trade Board suggestions from casually giving those days away. Credit hours — found under TCRD inside the pairing in FLICA, typed the same way FLICA shows it (e.g. 4 hours 30 minutes is "0430") — are what let either one actually add to your totals: SDO uses the trip's overall credit hours entered next to it, while Premium on a multi-day trip needs each flagged day's own credit hours entered right next to that day once expanded, since a trip's total is never split evenly across its days (a 1-day trip has no such split to worry about, so it just reuses the trip's overall credit hours). A flagged day with no credit entered is still protected, it just doesn't add to the math yet.</div>
 
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Where can I see all the changes I've made, and undo one by mistake?</div>
               <div style={{ marginBottom: 14 }}>The change log at the bottom of the tool lists every confirmed ("Approved") change, each with its own Revert button.</div>
@@ -3280,6 +3294,9 @@ export default function DayOffPayPlanner() {
                         <div>
                           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             <span style={{ fontSize: 11, color: t.isPremium ? "var(--amber-strong)" : "var(--text-faint)" }}>{t.premiumDayKeys.length}/{t.days} days</span>
+                            <label className="chk" style={{ marginRight: 0 }}>
+                              <input type="checkbox" checked={t.premiumDayKeys.length === t.days} onChange={() => toggleWholeTripPremium(t)} /> Whole trip
+                            </label>
                             <button className="action small" onClick={() => togglePremiumTripExpanded(t.key)}>{expandedPremiumTrips.has(t.key) ? "Hide" : "Show"}</button>
                           </div>
                           {expandedPremiumTrips.has(t.key) && (
@@ -3310,7 +3327,7 @@ export default function DayOffPayPlanner() {
                 ))}
               </tbody>
             </table>
-            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium is flagged per day — check off just the specific dates that actually carry premium pay on a multi-day trip ("Show" reveals one checkbox per day) — and a trip with any day flagged this way is excluded from swap and trade-board suggestions, same as before, so they don't casually give away extra-value trips. Premium pays 150% (the normal worked credit plus half again). A trip's total credit is never split evenly across its days, so on a multi-day trip each flagged day needs its own credit hours typed in next to it once expanded, not the trip's overall total — a 1-day trip has no such split to worry about, so it just reuses the credit hours entered above. Without a day's credit entered, it's still protected from swap/trade-board giveaway, it just doesn't add anything to your totals yet. Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
+            <div className="hint">SDO = already a Day Off Pay trip on your line — dropping it would give back that bonus. FLICA's schedule export doesn't include per-trip credit, so enter it yourself (e.g. 1636 for 16h36m): for an SDO trip it counts its confirmed bonus in the Actual and Planned totals below; for any trip, entering it also lets a Swap that drops this trip auto-adjust your baseline credit (swap-in credit is always known from the board — only the dropped trips' credit needs entering) and lets the tool check that swap against the 60-hour floor before letting you plan or approve it. Without it, a swap leaves baseline untouched, isn't checked against the floor, and you'll need to adjust it by hand. Premium is flagged per day — check off just the specific dates that actually carry premium pay on a multi-day trip ("Show" reveals one checkbox per day), or check "Whole trip" right next to "Show" if every day of it is premium — and a trip with any day flagged this way is excluded from swap and trade-board suggestions, same as before, so they don't casually give away extra-value trips. Premium pays 150% (the normal worked credit plus half again). A trip's total credit is never split evenly across its days, so on a multi-day trip each flagged day needs its own credit hours typed in next to it once expanded, not the trip's overall total — a 1-day trip has no such split to worry about, so it just reuses the credit hours entered above. Without a day's credit entered, it's still protected from swap/trade-board giveaway, it just doesn't add anything to your totals yet. Lock a trip you don't want to give up for any reason — it's fully excluded from Swap-drop pairing and Trade Board post candidates, even if it's otherwise droppable.</div>
           </div>
         )}
 
